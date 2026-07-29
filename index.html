@@ -187,6 +187,26 @@
   }
   .budget-amounts:hover{color:var(--ink);}
   .budget-pct{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-align:right; margin-top:4px;}
+  .budget-status{font-size:12px; margin-top:6px; font-weight:500;}
+  .budget-status.ok{color:var(--teal-text);}
+  .budget-status.warn{color:var(--gold);}
+  .budget-status.over{color:var(--brick);}
+
+  /* budgets tab summary header */
+  .budget-summary{margin-bottom:16px;}
+  .budget-summary-top{display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:10px;}
+  .budget-summary-amounts{font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; color:var(--ink);}
+  .budget-summary-of{font-size:14px; color:var(--ink-soft); font-weight:500;}
+  .budget-summary-sub{font-size:12px; color:var(--ink-soft); margin-top:3px;}
+  .budget-summary-flag{
+    flex-shrink:0; font-size:11px; font-weight:600; color:var(--brick);
+    background:rgba(168,69,47,0.10); border-radius:20px; padding:4px 10px; white-space:nowrap;
+  }
+
+  /* unbudgeted spending callout */
+  .budget-unbudgeted{border-style:dashed; text-align:center;}
+  .budget-unbudgeted-amt{font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:600; color:var(--ink-soft);}
+  .budget-unbudgeted-label{font-size:12px; color:var(--ink-soft); margin-top:3px; line-height:1.45;}
 
   .icon-btn{
     background:none; border:none; color:var(--ink-soft); font-size:20px; line-height:1;
@@ -207,6 +227,11 @@
   .gauge-fill.warn{background:var(--gold);}
   .gauge-fill.over{background:var(--brick);}
   .tick{position:absolute; top:0; bottom:0; width:1px; background:rgba(27,58,47,0.15);}
+  /* where spending "should" be by this point in the month */
+  .pace-marker{
+    position:absolute; top:0; bottom:0; width:2px;
+    background:var(--ink); opacity:0.5;
+  }
 
   /* spending-by-category chart */
   .spend-row{margin-bottom:14px;}
@@ -272,7 +297,8 @@
   .goal-head{display:flex; align-items:center; justify-content:space-between;}
   .goal-name{font-weight:600; font-size:14.5px;}
   .goal-linked-note{font-size:11.5px; color:var(--ink-soft); margin-top:3px; line-height:1.4;}
-  .goal-amounts{font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-soft); margin-top:2px;}
+  .goal-amounts{font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-soft); margin-top:2px; cursor:pointer;}
+  .goal-amounts:hover{color:var(--ink);}
   .goal-pct{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-align:right; margin-top:4px;}
 
   /* forms */
@@ -837,6 +863,27 @@
   function categorySpent(cat){
     return currentMonthTransactions().filter(function(t){ return t.type==='expense' && t.category===cat; }).reduce(function(s,t){ return s+t.amount; }, 0);
   }
+  // How far through the current month we are, 0..1. Used to show whether
+  // spending is ahead of or behind pace — "70% of the budget" means very
+  // different things on the 3rd vs the 28th.
+  function monthProgress(){
+    var now = new Date();
+    var daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return { day: now.getDate(), daysInMonth: daysInMonth, fraction: now.getDate() / daysInMonth };
+  }
+  // Expense spending this month in categories that have no budget set — a
+  // blind spot otherwise, since the Budgets tab only lists budgeted categories.
+  function unbudgetedSpending(){
+    var total = 0;
+    var cats = {};
+    currentMonthTransactions().forEach(function(t){
+      if(t.type !== 'expense') return;
+      if(t.category in state.budgets) return;
+      total += t.amount;
+      cats[t.category] = (cats[t.category] || 0) + t.amount;
+    });
+    return { total: total, categoryCount: Object.keys(cats).length };
+  }
   // All-time (not month-scoped) total for a category — used by goals linked to
   // a category, since a savings goal accumulates across its whole lifetime.
   function categoryTotalAllTime(cat){
@@ -935,13 +982,32 @@
     return categoryStamp(t.category);
   }
 
-  function gaugeBar(spent, limit){
+  // paceFraction is optional (0..1). When given — budgets, which are
+  // time-boxed to a month — a marker shows where spending "should" be by now,
+  // and the warn colour keys off being ahead of pace rather than a flat 80%.
+  // Goals call this without it (they have no deadline) and are unaffected.
+  function gaugeBar(spent, limit, paceFraction){
     var safeLimit = limit > 0 ? limit : 0;
-    var pct = safeLimit > 0 ? Math.min(100, (spent/safeLimit)*100) : 0;
+    var rawPct = safeLimit > 0 ? (spent/safeLimit)*100 : 0;
+    var pct = Math.min(100, rawPct);
     var over = safeLimit > 0 && spent > safeLimit;
-    var colorClass = over ? 'over' : (pct > 80 ? 'warn' : 'ok');
+    var colorClass;
+    if(over){
+      colorClass = 'over';
+    } else if(typeof paceFraction === 'number'){
+      // 10-point tolerance so early-month noise (day 2, one purchase) doesn't
+      // read as alarming before the trend means anything.
+      colorClass = rawPct > (paceFraction * 100) + 10 ? 'warn' : 'ok';
+    } else {
+      colorClass = rawPct > 80 ? 'warn' : 'ok';
+    }
     var ticks = [25,50,75].map(function(t){ return '<span class="tick" style="left:' + t + '%"></span>'; }).join('');
-    return '<div class="gauge"><div class="gauge-track"><div class="gauge-fill ' + colorClass + '" style="width:' + pct + '%"></div>' + ticks + '</div></div>';
+    var paceMarker = '';
+    if(typeof paceFraction === 'number'){
+      var pacePct = Math.min(100, Math.max(0, paceFraction * 100));
+      paceMarker = '<span class="pace-marker" style="left:' + pacePct + '%"></span>';
+    }
+    return '<div class="gauge"><div class="gauge-track"><div class="gauge-fill ' + colorClass + '" style="width:' + pct + '%"></div>' + ticks + paceMarker + '</div></div>';
   }
 
   function emptyState(title, body){
@@ -1003,17 +1069,40 @@
       '</div>';
   }
 
-  function budgetCard(cat){
+  // showPacing is false on the Home tab's compact snapshot (no room for the
+  // extra status line) and true on the Budgets tab itself.
+  function budgetCard(cat, showPacing){
     var limit = state.budgets[cat];
     var spent = categorySpent(cat);
     var pct = limit > 0 ? Math.round((spent/limit)*100) : 0;
+    var pace = monthProgress();
+    var remaining = limit - spent;
+
+    var statusHtml = '';
+    if(showPacing){
+      var expectedByNow = limit * pace.fraction;
+      var statusText, statusClass;
+      if(spent > limit){
+        statusText = fmt(spent - limit) + ' over budget';
+        statusClass = 'budget-status over';
+      } else if(spent > expectedByNow * 1.1){
+        statusText = fmt(remaining) + ' left · ahead of pace';
+        statusClass = 'budget-status warn';
+      } else {
+        statusText = fmt(remaining) + ' left · on track';
+        statusClass = 'budget-status ok';
+      }
+      statusHtml = '<div class="' + statusClass + '">' + statusText + '</div>';
+    }
+
     return '<div class="card budget-card" data-cat="' + escapeHtml(cat) + '">' +
       '<div class="budget-head">' + categoryStamp(cat) +
       '<div class="budget-info"><div class="budget-cat">' + escapeHtml(cat) + '</div>' +
       '<div class="budget-amounts" role="button" tabindex="0" aria-label="Edit ' + escapeHtml(cat) + ' budget limit, currently ' + fmt(spent) + ' of ' + fmt(limit) + '">' + fmt(spent) + ' of ' + fmt(limit) + '</div></div>' +
       '<button class="icon-btn del-budget" aria-label="Delete ' + escapeHtml(cat) + ' budget">×</button></div>' +
-      gaugeBar(spent, limit) +
-      '<div class="budget-pct">' + pct + '%</div></div>';
+      gaugeBar(spent, limit, showPacing ? pace.fraction : undefined) +
+      '<div class="budget-pct">' + pct + '%</div>' +
+      statusHtml + '</div>';
   }
 
   function addBudgetForm(){
@@ -1026,33 +1115,75 @@
       '<button id="add-budget-btn" class="btn-secondary" type="button">+ Add budget</button></div>';
   }
 
+  // A goal tracks progress one of three ways:
+  //   manual        — you type contributions in yourself
+  //   category-link — accumulates that category's all-time spending
+  //   account-link  — follows a live account balance. Assets count UP toward
+  //                   the target; liabilities count DOWN, so progress is how
+  //                   much of the debt you've paid off (100% = $0 owed).
+  function goalProgress(g){
+    if(g.accountId){
+      var acct = state.accounts.find(function(a){ return a.id === g.accountId; });
+      if(!acct){
+        return { mode:'account', current:0, missing:true, note:'Linked account no longer exists.' };
+      }
+      if(isLiabilityType(acct.type)){
+        var owed = Math.max(0, -accountBalance(g.accountId));
+        var paidOff = Math.max(0, g.target - owed);
+        return {
+          mode:'account', current: paidOff, isLiability:true, owed: owed,
+          note:'Paying down <strong>' + escapeHtml(acct.name) + '</strong> — ' + fmt(owed) + ' still owed.'
+        };
+      }
+      return {
+        mode:'account', current: Math.max(0, accountBalance(g.accountId)),
+        note:'Tracking the <strong>' + escapeHtml(acct.name) + '</strong> balance automatically.'
+      };
+    }
+    if(g.category){
+      return {
+        mode:'category', current: categoryTotalAllTime(g.category),
+        note:'Tracking <strong>' + escapeHtml(g.category) + '</strong> spending — log a transaction in that category to add funds.'
+      };
+    }
+    return { mode:'manual', current: g.current };
+  }
+
   function goalCard(g){
-    var isLinked = !!g.category;
-    var current = isLinked ? categoryTotalAllTime(g.category) : g.current;
+    var prog = goalProgress(g);
+    var current = prog.current;
     var pct = g.target > 0 ? Math.min(100, Math.round((current/g.target)*100)) : 0;
-    var linkedNote = isLinked
-      ? '<div class="goal-linked-note">Tracking <strong>' + escapeHtml(g.category) + '</strong> spending — log a transaction in that category to add funds.</div>'
-      : '';
-    var contribRow = isLinked ? '' :
+    var noteHtml = prog.note ? '<div class="goal-linked-note">' + prog.note + '</div>' : '';
+    var contribRow = prog.mode !== 'manual' ? '' :
       '<div class="form-row"><input class="contrib-input" type="number" inputmode="decimal" placeholder="Add amount" aria-label="Amount to add to ' + escapeHtml(g.name) + '" min="0" step="1">' +
       '<button class="btn-tiny add-contrib" type="button">Add</button></div>';
+    var amountsLabel = prog.isLiability ? 'paid off' : 'saved';
     return '<div class="card goal-card" data-id="' + g.id + '">' +
       '<div class="goal-head"><div class="goal-name">' + escapeHtml(g.name) + '</div>' +
       '<button class="icon-btn del-goal" aria-label="Delete ' + escapeHtml(g.name) + ' goal">×</button></div>' +
-      linkedNote +
-      '<div class="goal-amounts">' + fmt(current) + ' of ' + fmt(g.target) + '</div>' +
+      noteHtml +
+      '<div class="goal-amounts" role="button" tabindex="0" aria-label="Edit target for ' + escapeHtml(g.name) + ', currently ' + fmt(current) + ' ' + amountsLabel + ' of ' + fmt(g.target) + '">' +
+        fmt(current) + ' of ' + fmt(g.target) + '</div>' +
       gaugeBar(current, g.target) +
       '<div class="goal-pct">' + pct + '%</div>' +
       contribRow + '</div>';
   }
 
   function addGoalForm(){
-    var catOptions = '<option value="">No linked category — track manually</option>' +
-      state.categories.expense.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
+    var accountOpts = state.accounts.map(function(a){
+      var hint = isLiabilityType(a.type) ? ' (pay off)' : '';
+      return '<option value="account:' + escapeHtml(a.id) + '">' + escapeHtml(a.name) + hint + '</option>';
+    }).join('');
+    var catOpts = state.categories.expense.map(function(c){
+      return '<option value="category:' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>';
+    }).join('');
+    var linkOptions = '<option value="">No link — track manually</option>' +
+      '<optgroup label="Follow an account balance">' + accountOpts + '</optgroup>' +
+      '<optgroup label="Follow category spending">' + catOpts + '</optgroup>';
     return '<div class="card add-form">' +
       '<div class="form-row"><input id="new-goal-name" type="text" placeholder="Goal name" aria-label="Goal name" maxlength="40"></div>' +
       '<div class="form-row"><input id="new-goal-target" type="number" inputmode="decimal" placeholder="Target amount" aria-label="Target amount" min="0" step="1"></div>' +
-      '<div class="form-row"><select id="new-goal-category" aria-label="Linked category, optional">' + catOptions + '</select></div>' +
+      '<div class="form-row"><select id="new-goal-link" aria-label="What this goal follows, optional">' + linkOptions + '</select></div>' +
       '<button id="add-goal-btn" class="btn-secondary" type="button">+ Add goal</button></div>';
   }
 
@@ -1179,7 +1310,7 @@
     var exp = monthExpenses();
     var budgetCats = Object.keys(state.budgets).slice(0,3);
     var budgetSnapshot = budgetCats.length
-      ? budgetCats.map(budgetCard).join('')
+      ? budgetCats.map(function(c){ return budgetCard(c, false); }).join('')
       : '<div class="empty-inline">No budgets set yet. <a href="#" id="go-budgets">Add one</a></div>';
     var recent = state.transactions.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); }).slice(0,4);
     var recentHtml = recent.length
@@ -1206,9 +1337,54 @@
   function renderBudgets(){
     var container = document.getElementById('view-budgets');
     var cats = Object.keys(state.budgets);
-    var rows = cats.map(budgetCard).join('');
+    var pace = monthProgress();
+
+    var summaryHtml = '';
+    var rows = '';
+    if(cats.length > 0){
+      var totalBudgeted = cats.reduce(function(s,c){ return s + state.budgets[c]; }, 0);
+      var totalSpent = cats.reduce(function(s,c){ return s + categorySpent(c); }, 0);
+      var overCount = cats.filter(function(c){ return categorySpent(c) > state.budgets[c]; }).length;
+      var summaryPct = totalBudgeted > 0 ? Math.round((totalSpent/totalBudgeted)*100) : 0;
+      var overNote = overCount > 0
+        ? '<span class="budget-summary-flag">' + overCount + ' over limit</span>'
+        : '';
+
+      summaryHtml =
+        '<div class="card budget-summary">' +
+          '<div class="budget-summary-top">' +
+            '<div><div class="budget-summary-amounts">' + fmt(totalSpent) + ' <span class="budget-summary-of">of ' + fmt(totalBudgeted) + '</span></div>' +
+            '<div class="budget-summary-sub">Day ' + pace.day + ' of ' + pace.daysInMonth + ' · ' + summaryPct + '% used</div></div>' +
+            overNote +
+          '</div>' +
+          gaugeBar(totalSpent, totalBudgeted, pace.fraction) +
+        '</div>';
+
+      // Sort by urgency: over-budget first, then by how much of the limit is
+      // used — the budget you're about to blow should never be buried.
+      var sorted = cats.slice().sort(function(a,b){
+        var aPct = state.budgets[a] > 0 ? categorySpent(a)/state.budgets[a] : 0;
+        var bPct = state.budgets[b] > 0 ? categorySpent(b)/state.budgets[b] : 0;
+        return bPct - aPct;
+      });
+      rows = sorted.map(function(c){ return budgetCard(c, true); }).join('');
+    }
+
     var empty = cats.length === 0 ? emptyState('No budgets yet', 'Set a monthly limit for a category to start tracking.') : '';
-    container.innerHTML = '<div class="section-title">Monthly Budgets</div>' + empty + rows + addBudgetForm();
+
+    // Spending in categories with no budget is invisible otherwise, which can
+    // make this tab look healthy while real money goes untracked.
+    var unbudgeted = unbudgetedSpending();
+    var unbudgetedHtml = unbudgeted.total > 0
+      ? '<div class="card budget-unbudgeted">' +
+          '<div class="budget-unbudgeted-amt">' + fmt(unbudgeted.total) + '</div>' +
+          '<div class="budget-unbudgeted-label">spent this month in ' + unbudgeted.categoryCount +
+            ' categor' + (unbudgeted.categoryCount === 1 ? 'y' : 'ies') + ' with no budget set</div>' +
+        '</div>'
+      : '';
+
+    container.innerHTML = '<div class="section-title">Monthly Budgets</div>' +
+      summaryHtml + empty + rows + unbudgetedHtml + addBudgetForm();
   }
 
   function renderGoals(){
@@ -1673,14 +1849,39 @@
   async function addGoal(){
     var nameInput = document.getElementById('new-goal-name');
     var targetInput = document.getElementById('new-goal-target');
-    var categorySelect = document.getElementById('new-goal-category');
+    var linkSelect = document.getElementById('new-goal-link');
     var name = nameInput.value.trim();
     var target = parseFloat(targetInput.value);
     if(!name){ flashError2(nameInput); return; }
     if(!target || target <= 0){ flashError2(targetInput); return; }
-    var category = categorySelect.value || null;
-    state.goals.push({ id: 'goal_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, target: target, current: 0, category: category });
+    // The link select encodes its kind as an "account:"/"category:" prefix so
+    // one control can offer both without a second dropdown.
+    var linkVal = linkSelect.value || '';
+    var goal = { id: 'goal_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, target: target, current: 0, category: null, accountId: null };
+    if(linkVal.indexOf('account:') === 0){ goal.accountId = linkVal.slice('account:'.length); }
+    else if(linkVal.indexOf('category:') === 0){ goal.category = linkVal.slice('category:'.length); }
+    state.goals.push(goal);
     try{ await saveGoals(); showToast('Goal added'); renderCurrentTab(); }
+    catch(e){ showToast('Could not save'); }
+  }
+  function editGoalTarget(card){
+    var id = card.dataset.id;
+    var g = state.goals.find(function(x){ return x.id === id; });
+    var el = card.querySelector('.goal-amounts');
+    el.removeAttribute('role');
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
+    el.innerHTML = 'Target: <input class="inline-edit" type="number" value="' + g.target + '" min="0" step="1" aria-label="New target for ' + escapeHtml(g.name) + '"> <button class="btn-tiny save-goal-target" type="button">Save</button>';
+    el.querySelector('.inline-edit').focus();
+  }
+  async function saveGoalTarget(card){
+    var id = card.dataset.id;
+    var input = card.querySelector('.goal-amounts .inline-edit');
+    var newTarget = parseFloat(input.value);
+    if(!newTarget || newTarget <= 0){ flashError2(input); return; }
+    var g = state.goals.find(function(x){ return x.id === id; });
+    g.target = newTarget;
+    try{ await saveGoals(); showToast('Target updated'); renderCurrentTab(); }
     catch(e){ showToast('Could not save'); }
   }
   async function addContribution(id, inputEl){
@@ -2260,6 +2461,12 @@
     var delGoalBtn = target.closest('.del-goal');
     if(delGoalBtn){ deleteGoal(delGoalBtn.closest('.goal-card').dataset.id); return; }
 
+    var saveGoalTargetBtn = target.closest('.save-goal-target');
+    if(saveGoalTargetBtn){ saveGoalTarget(saveGoalTargetBtn.closest('.goal-card')); return; }
+
+    var goalAmounts = target.closest('.goal-amounts');
+    if(goalAmounts && !goalAmounts.querySelector('.inline-edit')){ editGoalTarget(goalAmounts.closest('.goal-card')); return; }
+
     var addContribBtn = target.closest('.add-contrib');
     if(addContribBtn){
       var goalCardEl = addContribBtn.closest('.goal-card');
@@ -2327,7 +2534,9 @@
   document.getElementById('app-content').addEventListener('keydown', function(e){
     if(e.key !== 'Enter' && e.key !== ' ') return;
     var budgetAmounts = e.target.closest('.budget-amounts[role="button"]');
-    if(budgetAmounts){ e.preventDefault(); editBudgetLimit(budgetAmounts.closest('.budget-card')); }
+    if(budgetAmounts){ e.preventDefault(); editBudgetLimit(budgetAmounts.closest('.budget-card')); return; }
+    var goalAmounts = e.target.closest('.goal-amounts[role="button"]');
+    if(goalAmounts){ e.preventDefault(); editGoalTarget(goalAmounts.closest('.goal-card')); }
   });
 
   document.querySelectorAll('.nav-btn').forEach(function(btn){
