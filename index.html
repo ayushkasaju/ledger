@@ -457,6 +457,7 @@
       <div class="view" id="view-budgets"></div>
       <div class="view" id="view-goals"></div>
       <div class="view" id="view-history"></div>
+      <div class="view" id="view-settings"></div>
     </main>
 
     <button id="fab" aria-label="Add transaction">+</button>
@@ -477,6 +478,10 @@
       <button class="nav-btn" data-tab="history">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.3 2"/></svg>
         <span>History</span>
+      </button>
+      <button class="nav-btn" data-tab="settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.04 1.56V19.5a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.04-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.04H4.5a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.04 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H10.6a1.7 1.7 0 0 0 1.04-1.56V4.5a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.04 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V10.6a1.7 1.7 0 0 0 1.56 1.04H19.5a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.56 1.04z"/></svg>
+        <span>Settings</span>
       </button>
     </nav>
   </div>
@@ -1087,7 +1092,6 @@
 
   function renderHistory(){
     var container = document.getElementById('view-history');
-    var hasData = state.transactions.length > 0 || Object.keys(state.budgets).length > 0 || state.goals.length > 0;
 
     var filterHtml = '';
     var listHtml;
@@ -1112,28 +1116,7 @@
         : '<div class="empty-inline">No transactions match your search.</div>';
     }
 
-    var accountsSection =
-      '<div class="section-head"><div class="section-title">Accounts</div></div>' +
-      '<div class="card"><p class="import-help" style="margin-bottom:12px;">' + state.accounts.length + ' account' + (state.accounts.length === 1 ? '' : 's') + '.</p>' +
-      '<button id="open-accounts-btn" class="btn-secondary" type="button">Manage accounts</button></div>';
-
-    var categoriesSection =
-      '<div class="section-head"><div class="section-title">Categories</div></div>' +
-      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Customize what shows up when you log a transaction.</p>' +
-      '<button id="open-categories-btn" class="btn-secondary" type="button">Manage categories</button></div>';
-
-    var recurringSection = state.recurring.length > 0
-      ? '<div class="section-head"><div class="section-title">Recurring</div></div>' + state.recurring.map(recurRow).join('')
-      : '';
-
-    var backupSection =
-      '<div class="section-head"><div class="section-title">Backup</div></div>' +
-      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Your data lives only on this device. Back it up so you don\'t lose it if you clear browser data or switch phones.</p>' +
-      '<button id="open-backup-btn" class="btn-secondary" type="button">Backup &amp; restore</button></div>';
-    var resetRow = hasData ? '<div class="reset-row"><button id="reset-btn" class="btn-text-danger" type="button">Clear all data</button></div>' : '';
-
-    container.innerHTML = '<div class="section-title">History</div>' + filterHtml + listHtml +
-      accountsSection + categoriesSection + recurringSection + backupSection + resetRow;
+    container.innerHTML = '<div class="section-title">History</div>' + filterHtml + listHtml;
 
     var searchInput = document.getElementById('history-search');
     if(searchInput){
@@ -1154,11 +1137,42 @@
     }
   }
 
+  function renderSettings(){
+    var container = document.getElementById('view-settings');
+
+    var accountsSection =
+      '<div class="section-head"><div class="section-title">Accounts</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">' + state.accounts.length + ' account' + (state.accounts.length === 1 ? '' : 's') + '.</p>' +
+      '<button id="open-accounts-btn" class="btn-secondary" type="button">Manage accounts</button></div>';
+
+    var categoriesSection =
+      '<div class="section-head"><div class="section-title">Categories</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Customize what shows up when you log a transaction.</p>' +
+      '<button id="open-categories-btn" class="btn-secondary" type="button">Manage categories</button></div>';
+
+    var recurringSection =
+      '<div class="section-head"><div class="section-title">Recurring</div></div>' +
+      (state.recurring.length > 0
+        ? state.recurring.map(recurRow).join('')
+        : '<div class="empty-inline">Nothing repeating yet. Toggle "Repeat" when adding a transaction to set one up.</div>');
+
+    var backupSection =
+      '<div class="section-head"><div class="section-title">Backup</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Your data lives only on this device. Back it up so you don\'t lose it if you clear browser data or switch phones.</p>' +
+      '<button id="open-backup-btn" class="btn-secondary" type="button">Backup &amp; restore</button></div>';
+
+    var resetRow = '<div class="reset-row"><button id="reset-btn" class="btn-text-danger" type="button">Clear all data</button></div>';
+
+    container.innerHTML = '<div class="section-title">Settings</div>' +
+      accountsSection + categoriesSection + recurringSection + backupSection + resetRow;
+  }
+
   function renderCurrentTab(){
     if(activeTab === 'home') renderHome();
     else if(activeTab === 'budgets') renderBudgets();
     else if(activeTab === 'goals') renderGoals();
     else if(activeTab === 'history') renderHistory();
+    else if(activeTab === 'settings') renderSettings();
   }
 
   function switchTab(tab){
@@ -1429,13 +1443,21 @@
     }
   }
   async function resetAllData(){
-    state = { transactions: [], budgets: {}, goals: [] };
+    state = {
+      transactions: [], budgets: {}, goals: [],
+      accounts: normalizeAccounts([]), categories: normalizeCategories(null),
+      categoryColors: {}, recurring: []
+    };
     try{
-      localStorage.setItem('ledger:transactions', JSON.stringify([]));
-      localStorage.setItem('ledger:budgets', JSON.stringify({}));
-      localStorage.setItem('ledger:goals', JSON.stringify([]));
+      await saveTransactions();
+      await saveBudgets();
+      await saveGoals();
+      await saveAccounts();
+      await saveCategories();
+      await saveCategoryColors();
+      await saveRecurring();
       showToast('All data cleared');
-      renderCurrentTab();
+      switchTab('home');
     }catch(e){ showToast('Could not clear data'); }
   }
 
