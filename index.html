@@ -289,6 +289,12 @@
   .account-row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
   .account-name-edit{font-weight:600; font-size:14px; cursor:pointer;}
   .account-name-edit:hover{color:var(--teal-text);}
+  .account-type-badge{
+    display:inline-flex; align-items:center; margin-top:8px; padding:4px 10px;
+    border:1px solid var(--line); border-radius:20px; background:var(--paper);
+    font-size:11px; color:var(--ink-soft); font-weight:500;
+  }
+  .account-type-badge:hover{border-color:var(--ink-soft); color:var(--ink);}
   .account-balance{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:8px;}
   .account-starting{font-size:12px; color:var(--ink-soft); margin-top:6px; cursor:pointer;}
   .account-starting:hover{color:var(--ink);}
@@ -301,6 +307,10 @@
   }
   .acct-balance-row:last-child{border-bottom:none;}
   .acct-balance-name{color:var(--ink-soft);}
+  .acct-balance-tag{
+    font-size:10px; color:var(--ink-soft); background:var(--paper);
+    padding:2px 7px; border-radius:8px; margin-left:6px; vertical-align:middle;
+  }
   .acct-balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:600;}
 
   /* recurring rule row */
@@ -564,6 +574,10 @@
     <div class="sheet-handle" aria-hidden="true"></div>
     <div class="sheet-title" id="accounts-sheet-title">Accounts</div>
     <div id="accounts-list" style="margin-bottom:14px;"></div>
+    <div class="type-toggle" style="margin-bottom:10px;">
+      <button id="new-account-type-bank" class="type-btn active" type="button">Bank account</button>
+      <button id="new-account-type-credit" class="type-btn" type="button">Credit card</button>
+    </div>
     <div class="form-row">
       <input id="new-account-name" type="text" placeholder="Account name" aria-label="Account name" maxlength="30">
       <button id="add-account-btn" class="btn-tiny" type="button">Add</button>
@@ -623,16 +637,18 @@
   var resetTimer = null;
   var toastTimer = null;
   var historyFilter = { query: '', accountId: 'all' };
+  var newAccountType = 'bank';
 
   /* ---------- storage (standard localStorage — this is the standalone, self-hosted build) ---------- */
   // Shared fallback logic — used both on normal load and when restoring a
   // backup (including older backups from before accounts/categories existed).
   function normalizeAccounts(list){
     if(!Array.isArray(list) || list.length === 0){
-      return [{ id: 'acct_default', name: 'Main Account', startingBalance: 0 }];
+      return [{ id: 'acct_default', name: 'Main Account', startingBalance: 0, type: 'bank' }];
     }
     return list;
   }
+  function accountTypeLabel(type){ return type === 'credit' ? 'Credit card' : 'Bank account'; }
   function normalizeCategories(obj){
     if(!obj || !Array.isArray(obj.expense) || !Array.isArray(obj.income)){
       return { expense: DEFAULT_EXPENSE_CATS.slice(), income: DEFAULT_INCOME_CATS.slice() };
@@ -1001,7 +1017,8 @@
     if(state.accounts.length <= 1) return '';
     var rows = state.accounts.map(function(a){
       var bal = accountBalance(a.id);
-      return '<div class="acct-balance-row"><span class="acct-balance-name">' + escapeHtml(a.name) + '</span>' +
+      var tag = a.type === 'credit' ? '<span class="acct-balance-tag">credit card</span>' : '';
+      return '<div class="acct-balance-row"><span class="acct-balance-name">' + escapeHtml(a.name) + tag + '</span>' +
         '<span class="acct-balance-amt ' + (bal < 0 ? 'amt-neg' : 'amt-pos') + '">' + fmt(bal) + '</span></div>';
     }).join('');
     return '<div class="card acct-balances">' + rows + '</div>';
@@ -1695,14 +1712,20 @@
   function accountRow(a){
     var bal = accountBalance(a.id);
     var colorClass = bal < 0 ? 'amt-neg' : 'amt-pos';
-    var starting = a.startingBalance || 0;
+    var isCredit = a.type === 'credit';
+    var startingLabel = isCredit ? 'Amount owed' : 'Starting balance';
+    // A credit card's starting point is entered and shown as a positive "amount
+    // owed" — never asking the user to type a negative number — and negated
+    // internally so it still works as a normal (negative) contribution to net worth.
+    var startingDisplay = isCredit ? -(a.startingBalance || 0) : (a.startingBalance || 0);
     return '<div class="card account-card" data-id="' + escapeHtml(a.id) + '">' +
       '<div class="account-row">' +
         '<div class="account-name-edit" role="button" tabindex="0" aria-label="Rename ' + escapeHtml(a.name) + ' account">' + escapeHtml(a.name) + '</div>' +
         '<button class="icon-btn del-account" aria-label="Delete ' + escapeHtml(a.name) + ' account">×</button>' +
       '</div>' +
+      '<button class="account-type-badge" type="button" data-id="' + escapeHtml(a.id) + '" aria-label="Account type: ' + accountTypeLabel(a.type) + '. Tap to change.">' + accountTypeLabel(a.type) + '</button>' +
       '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div>' +
-      '<div class="account-starting" role="button" tabindex="0" aria-label="Edit starting balance for ' + escapeHtml(a.name) + ', currently ' + fmt(starting) + '">Starting balance: <span class="mono">' + fmt(starting) + '</span></div>' +
+      '<div class="account-starting" role="button" tabindex="0" aria-label="Edit ' + startingLabel.toLowerCase() + ' for ' + escapeHtml(a.name) + ', currently ' + fmt(startingDisplay) + '">' + startingLabel + ': <span class="mono">' + fmt(startingDisplay) + '</span></div>' +
       '</div>';
   }
   function editAccountName(card){
@@ -1732,11 +1755,14 @@
   function editAccountStarting(card){
     var id = card.dataset.id;
     var acct = state.accounts.find(function(a){ return a.id === id; });
+    var isCredit = acct.type === 'credit';
+    var label = isCredit ? 'Amount owed' : 'Starting balance';
+    var displayVal = isCredit ? -(acct.startingBalance || 0) : (acct.startingBalance || 0);
     var el = card.querySelector('.account-starting');
     el.removeAttribute('role');
     el.removeAttribute('tabindex');
     el.removeAttribute('aria-label');
-    el.innerHTML = 'Starting balance: <input class="inline-edit" type="number" inputmode="decimal" value="' + (acct.startingBalance || 0) + '" step="0.01" aria-label="Starting balance for ' + escapeHtml(acct.name) + '"> <button class="btn-tiny save-account-starting" type="button">Save</button>';
+    el.innerHTML = label + ': <input class="inline-edit" type="number" inputmode="decimal" value="' + displayVal + '" step="0.01" aria-label="' + label + ' for ' + escapeHtml(acct.name) + '"> <button class="btn-tiny save-account-starting" type="button">Save</button>';
     el.querySelector('.inline-edit').focus();
   }
   async function saveAccountStarting(card){
@@ -1745,20 +1771,36 @@
     var val = parseFloat(input.value);
     if(isNaN(val)){ flashError2(input); return; }
     var acct = state.accounts.find(function(a){ return a.id === id; });
-    acct.startingBalance = val;
+    acct.startingBalance = acct.type === 'credit' ? -val : val;
     try{
       await saveAccounts();
       renderAccountsList();
-      showToast('Starting balance updated');
+      showToast((acct.type === 'credit' ? 'Amount owed' : 'Starting balance') + ' updated');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not save'); }
+  }
+  async function toggleAccountType(id){
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    acct.type = acct.type === 'credit' ? 'bank' : 'credit';
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast('Now a ' + accountTypeLabel(acct.type).toLowerCase());
       renderCurrentTab();
     }catch(e){ showToast('Could not save'); }
   }
   function renderAccountsList(){
     document.getElementById('accounts-list').innerHTML = state.accounts.map(accountRow).join('');
   }
+  function updateNewAccountTypeToggle(){
+    document.getElementById('new-account-type-bank').classList.toggle('active', newAccountType === 'bank');
+    document.getElementById('new-account-type-credit').classList.toggle('active', newAccountType === 'credit');
+  }
   function openAccountsSheet(){
     renderAccountsList();
     document.getElementById('new-account-name').value = '';
+    newAccountType = 'bank';
+    updateNewAccountTypeToggle();
     openSheetEl(document.getElementById('accounts-sheet'), document.getElementById('accounts-overlay'), document.getElementById('new-account-name'));
   }
   function closeAccountsSheet(){
@@ -1768,7 +1810,7 @@
     var input = document.getElementById('new-account-name');
     var name = input.value.trim();
     if(!name){ flashError2(input); return; }
-    state.accounts.push({ id: 'acct_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, startingBalance: 0 });
+    state.accounts.push({ id: 'acct_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, startingBalance: 0, type: newAccountType });
     try{
       await saveAccounts();
       input.value = '';
@@ -1929,6 +1971,9 @@
 
     var startingEdit = e.target.closest('.account-starting');
     if(startingEdit && !startingEdit.querySelector('.inline-edit')){ editAccountStarting(startingEdit.closest('.account-card')); return; }
+
+    var typeBadge = e.target.closest('.account-type-badge');
+    if(typeBadge){ toggleAccountType(typeBadge.dataset.id); return; }
   });
   document.getElementById('accounts-sheet').addEventListener('keydown', function(e){
     if(e.key !== 'Enter' && e.key !== ' ') return;
@@ -1977,6 +2022,8 @@
   document.getElementById('accounts-overlay').addEventListener('click', closeAccountsSheet);
   document.getElementById('accounts-close').addEventListener('click', closeAccountsSheet);
   document.getElementById('add-account-btn').addEventListener('click', addAccount);
+  document.getElementById('new-account-type-bank').addEventListener('click', function(){ newAccountType = 'bank'; updateNewAccountTypeToggle(); });
+  document.getElementById('new-account-type-credit').addEventListener('click', function(){ newAccountType = 'credit'; updateNewAccountTypeToggle(); });
 
   document.getElementById('categories-overlay').addEventListener('click', closeCategoriesSheet);
   document.getElementById('categories-close').addEventListener('click', closeCategoriesSheet);
