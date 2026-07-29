@@ -273,6 +273,39 @@
     border-radius:6px; width:90px; font-size:12.5px;
   }
 
+  /* category chips (categories management sheet) */
+  .chip-list{display:flex; flex-wrap:wrap; gap:7px;}
+  .chip{
+    display:flex; align-items:center; gap:4px; padding:6px 6px 6px 12px;
+    border:1px solid var(--line); border-radius:20px; background:var(--card); font-size:12.5px;
+  }
+  .chip-del{
+    background:none; border:none; color:var(--ink-soft); font-size:15px; line-height:1;
+    width:26px; height:26px; border-radius:50%; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+  }
+  .chip-del:hover{background:var(--paper); color:var(--brick);}
+
+  /* account row (accounts management sheet) */
+  .account-row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .account-name{font-weight:600; font-size:14px;}
+  .account-balance{font-family:'IBM Plex Mono',monospace; font-size:12.5px; margin-top:2px;}
+
+  /* account balance breakdown (home) */
+  .acct-balances{margin-bottom:16px;}
+  .acct-balance-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:8px 0; border-bottom:1px solid var(--line); font-size:13px;
+  }
+  .acct-balance-row:last-child{border-bottom:none;}
+  .acct-balance-name{color:var(--ink-soft);}
+  .acct-balance-amt{font-family:'IBM Plex Mono',monospace; font-weight:600;}
+
+  /* recurring rule row */
+  .recur-row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
+  .recur-info{min-width:0;}
+  .recur-title{font-weight:600; font-size:13.5px;}
+  .recur-meta{font-size:12px; color:var(--ink-soft); margin-top:1px;}
+
   /* history */
   .history-list{padding:4px 14px;}
   .hist-row{
@@ -442,14 +475,33 @@
     <div class="type-toggle">
       <button id="type-expense" class="type-btn active" type="button">Expense</button>
       <button id="type-income" class="type-btn" type="button">Income</button>
+      <button id="type-transfer" class="type-btn" type="button">Transfer</button>
     </div>
     <div class="form-group">
       <label for="tx-amount">Amount</label>
       <input id="tx-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
     </div>
-    <div class="form-group">
+    <div id="tx-category-group" class="form-group">
       <label for="tx-category">Category</label>
       <select id="tx-category"></select>
+      <div id="tx-new-category-row" class="form-row" style="display:none; margin-top:8px;">
+        <input id="tx-new-category" type="text" maxlength="30" placeholder="New category name" aria-label="New category name">
+        <button id="tx-new-category-add" class="btn-tiny" type="button">Add</button>
+      </div>
+    </div>
+    <div id="tx-account-group" class="form-group">
+      <label for="tx-account">Account</label>
+      <select id="tx-account"></select>
+    </div>
+    <div id="tx-transfer-group" style="display:none;">
+      <div class="form-group">
+        <label for="tx-from-account">From account</label>
+        <select id="tx-from-account"></select>
+      </div>
+      <div class="form-group">
+        <label for="tx-to-account">To account</label>
+        <select id="tx-to-account"></select>
+      </div>
     </div>
     <div class="form-group">
       <label for="tx-note">Note (optional)</label>
@@ -458,6 +510,14 @@
     <div class="form-group">
       <label for="tx-date">Date</label>
       <input id="tx-date" type="date">
+    </div>
+    <div id="tx-repeat-group" class="form-group">
+      <label for="tx-repeat">Repeat</label>
+      <select id="tx-repeat" aria-label="Repeat">
+        <option value="">Does not repeat</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+      </select>
     </div>
     <div class="sheet-actions">
       <button id="sheet-cancel" class="btn-ghost" type="button">Cancel</button>
@@ -469,6 +529,10 @@
   <div class="sheet" id="import-sheet" role="dialog" aria-modal="true" aria-labelledby="import-sheet-title" tabindex="-1" inert>
     <div class="sheet-handle" aria-hidden="true"></div>
     <div class="sheet-title" id="import-sheet-title">Import from CSV</div>
+    <div id="import-account-row" class="form-group" style="display:none;">
+      <label for="import-account">Import into account</label>
+      <select id="import-account"></select>
+    </div>
     <div id="import-body"></div>
     <div class="sheet-actions">
       <button id="import-cancel" class="btn-ghost" type="button">Cancel</button>
@@ -492,6 +556,41 @@
     </div>
   </div>
 
+  <div class="overlay" id="accounts-overlay"></div>
+  <div class="sheet" id="accounts-sheet" role="dialog" aria-modal="true" aria-labelledby="accounts-sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="accounts-sheet-title">Accounts</div>
+    <div id="accounts-list" style="margin-bottom:14px;"></div>
+    <div class="form-row">
+      <input id="new-account-name" type="text" placeholder="Account name" aria-label="Account name" maxlength="30">
+      <button id="add-account-btn" class="btn-tiny" type="button">Add</button>
+    </div>
+    <div class="sheet-actions">
+      <button id="accounts-close" class="btn-ghost" type="button" style="flex:1;">Close</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="categories-overlay"></div>
+  <div class="sheet" id="categories-sheet" role="dialog" aria-modal="true" aria-labelledby="categories-sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="categories-sheet-title">Categories</div>
+    <div class="section-title" style="font-size:14px; margin-bottom:8px;">Expense</div>
+    <div id="expense-categories-list" style="margin-bottom:10px;"></div>
+    <div class="form-row">
+      <input id="new-expense-cat" type="text" placeholder="New expense category" aria-label="New expense category" maxlength="30">
+      <button id="add-expense-cat-btn" class="btn-tiny" type="button">Add</button>
+    </div>
+    <div class="section-title" style="font-size:14px; margin:18px 0 8px;">Income</div>
+    <div id="income-categories-list" style="margin-bottom:10px;"></div>
+    <div class="form-row">
+      <input id="new-income-cat" type="text" placeholder="New income category" aria-label="New income category" maxlength="30">
+      <button id="add-income-cat-btn" class="btn-tiny" type="button">Add</button>
+    </div>
+    <div class="sheet-actions">
+      <button id="categories-close" class="btn-ghost" type="button" style="flex:1;">Close</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </div>
 
@@ -499,31 +598,52 @@
 (function(){
   "use strict";
 
-  var EXPENSE_CATS = ['Food & Dining','Transport','Housing','Utilities','Entertainment','Shopping','Health','Education','Other'];
-  var INCOME_CATS = ['Salary','Freelance','Gift','Investment','Other'];
-  // Fixed name -> chart color. Only 6 categories get a distinct identity color
-  // (the palette is validated for CVD-safe separation at 6 slots — see the
-  // --cat-* custom properties); everything else folds into the neutral "Other"
-  // bucket in the chart, same as the literal "Other" category does.
-  var CATEGORY_COLOR_MAP = {
-    'Food & Dining': 'var(--cat-1)',
-    'Transport': 'var(--cat-2)',
-    'Housing': 'var(--cat-3)',
-    'Shopping': 'var(--cat-4)',
-    'Entertainment': 'var(--cat-5)',
-    'Health': 'var(--cat-6)'
-  };
+  var DEFAULT_EXPENSE_CATS = ['Food & Dining','Transport','Housing','Utilities','Entertainment','Shopping','Health','Education','Other'];
+  var DEFAULT_INCOME_CATS = ['Salary','Freelance','Gift','Investment','Other'];
+  // 6 identity colors (see --cat-* custom properties — validated for CVD-safe
+  // separation and contrast against --card). Categories claim a slot on first
+  // use, in state.categoryColors, permanently — never reassigned by rank.
+  // Categories beyond the 6 slots, and the literal "Other" category, always
+  // fold into the shared neutral bucket.
+  var CATEGORY_COLOR_SLOTS = ['var(--cat-1)','var(--cat-2)','var(--cat-3)','var(--cat-4)','var(--cat-5)','var(--cat-6)'];
   var CATEGORY_OTHER_COLOR = 'var(--cat-other)';
   var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var RECUR_FREQ_DAYS = { weekly: 7 };
 
-  var state = { transactions: [], budgets: {}, goals: [] };
+  var state = {
+    transactions: [], budgets: {}, goals: [],
+    accounts: [], categories: { expense: [], income: [] }, categoryColors: {}, recurring: []
+  };
   var activeTab = 'home';
-  var txType = 'expense';
+  var txType = 'expense'; // 'expense' | 'income' | 'transfer'
   var resetArmed = false;
   var resetTimer = null;
   var toastTimer = null;
+  var historyFilter = { query: '', accountId: 'all' };
 
   /* ---------- storage (standard localStorage — this is the standalone, self-hosted build) ---------- */
+  // Shared fallback logic — used both on normal load and when restoring a
+  // backup (including older backups from before accounts/categories existed).
+  function normalizeAccounts(list){
+    if(!Array.isArray(list) || list.length === 0){
+      return [{ id: 'acct_default', name: 'Main Account' }];
+    }
+    return list;
+  }
+  function normalizeCategories(obj){
+    if(!obj || !Array.isArray(obj.expense) || !Array.isArray(obj.income)){
+      return { expense: DEFAULT_EXPENSE_CATS.slice(), income: DEFAULT_INCOME_CATS.slice() };
+    }
+    return obj;
+  }
+  function migrateTransactionAccounts(transactions, accounts){
+    var migrated = false;
+    transactions.forEach(function(t){
+      if(!t.accountId){ t.accountId = accounts[0].id; migrated = true; }
+    });
+    return migrated;
+  }
+
   async function loadState(){
     try{
       var t = localStorage.getItem('ledger:transactions');
@@ -537,10 +657,51 @@
       var g = localStorage.getItem('ledger:goals');
       state.goals = g ? JSON.parse(g) : [];
     }catch(e){ state.goals = []; }
+    try{
+      var a = localStorage.getItem('ledger:accounts');
+      state.accounts = a ? JSON.parse(a) : [];
+    }catch(e){ state.accounts = []; }
+    state.accounts = normalizeAccounts(state.accounts);
+    try{
+      var c = localStorage.getItem('ledger:categories');
+      state.categories = c ? JSON.parse(c) : null;
+    }catch(e){ state.categories = null; }
+    state.categories = normalizeCategories(state.categories);
+    try{
+      var cc = localStorage.getItem('ledger:categoryColors');
+      state.categoryColors = cc ? JSON.parse(cc) : {};
+    }catch(e){ state.categoryColors = {}; }
+    try{
+      var r = localStorage.getItem('ledger:recurring');
+      state.recurring = r ? JSON.parse(r) : [];
+    }catch(e){ state.recurring = []; }
+
+    if(migrateTransactionAccounts(state.transactions, state.accounts)) await saveTransactions();
   }
   async function saveTransactions(){ localStorage.setItem('ledger:transactions', JSON.stringify(state.transactions)); }
   async function saveBudgets(){ localStorage.setItem('ledger:budgets', JSON.stringify(state.budgets)); }
   async function saveGoals(){ localStorage.setItem('ledger:goals', JSON.stringify(state.goals)); }
+  async function saveAccounts(){ localStorage.setItem('ledger:accounts', JSON.stringify(state.accounts)); }
+  async function saveCategories(){ localStorage.setItem('ledger:categories', JSON.stringify(state.categories)); }
+  async function saveCategoryColors(){ localStorage.setItem('ledger:categoryColors', JSON.stringify(state.categoryColors)); }
+  async function saveRecurring(){ localStorage.setItem('ledger:recurring', JSON.stringify(state.recurring)); }
+
+  function getCategoryColor(name){
+    if(name === 'Other') return CATEGORY_OTHER_COLOR;
+    if(state.categoryColors[name]) return state.categoryColors[name];
+    var used = {};
+    Object.keys(state.categoryColors).forEach(function(k){ used[state.categoryColors[k]] = true; });
+    var free = CATEGORY_COLOR_SLOTS.filter(function(c){ return !used[c]; })[0];
+    if(!free) return CATEGORY_OTHER_COLOR;
+    state.categoryColors[name] = free;
+    saveCategoryColors();
+    return free;
+  }
+
+  function accountName(id){
+    var a = state.accounts.find(function(x){ return x.id === id; });
+    return a ? a.name : 'Unknown account';
+  }
 
   /* ---------- helpers ---------- */
   function escapeHtml(str){
@@ -574,7 +735,25 @@
     });
   }
   function totalBalance(){
-    return state.transactions.reduce(function(sum,t){ return sum + (t.type==='income' ? t.amount : -t.amount); }, 0);
+    // A transfer moves money between your own accounts — net effect on total
+    // net worth is zero by definition, so it's excluded here entirely (it's
+    // still counted per-account, in accountBalance).
+    return state.transactions.reduce(function(sum,t){
+      if(t.type === 'income') return sum + t.amount;
+      if(t.type === 'expense') return sum - t.amount;
+      return sum;
+    }, 0);
+  }
+  function accountBalance(accountId){
+    return state.transactions.reduce(function(sum,t){
+      if(t.type === 'income' && t.accountId === accountId) return sum + t.amount;
+      if(t.type === 'expense' && t.accountId === accountId) return sum - t.amount;
+      if(t.type === 'transfer'){
+        if(t.accountId === accountId) return sum - t.amount;
+        if(t.toAccountId === accountId) return sum + t.amount;
+      }
+      return sum;
+    }, 0);
   }
   function monthIncome(){
     return currentMonthTransactions().filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+t.amount; }, 0);
@@ -587,11 +766,9 @@
   }
 
   /* ---------- chart data ---------- */
-  // Spending by category, current month. Named categories with a fixed color
-  // (CATEGORY_COLOR_MAP) always keep their identity; everything else — including
-  // the literal "Other" category — is combined into one neutral "Other" row.
-  // Color always follows the category name, never its rank, so a category's
-  // color can't change month to month just because the totals reshuffled.
+  // Spending by category, current month. Categories claim a color slot on
+  // first use (getCategoryColor), permanently — everything past the 6 slots,
+  // and the literal "Other" category, fold into one neutral "Other" row.
   function spendingByCategory(){
     var totals = {};
     currentMonthTransactions().forEach(function(t){
@@ -601,11 +778,10 @@
     var rows = [];
     var otherTotal = 0;
     Object.keys(totals).forEach(function(cat){
-      if(CATEGORY_COLOR_MAP[cat]){
-        rows.push({ name: cat, amount: totals[cat], color: CATEGORY_COLOR_MAP[cat] });
-      } else {
-        otherTotal += totals[cat];
-      }
+      if(cat === 'Other'){ otherTotal += totals[cat]; return; }
+      var color = getCategoryColor(cat);
+      if(color === CATEGORY_OTHER_COLOR){ otherTotal += totals[cat]; }
+      else{ rows.push({ name: cat, amount: totals[cat], color: color }); }
     });
     if(otherTotal > 0){
       rows.push({ name: 'Other', amount: otherTotal, color: CATEGORY_OTHER_COLOR });
@@ -650,6 +826,10 @@
     var letter = (cat || '?').charAt(0).toUpperCase();
     return '<span class="stamp">' + escapeHtml(letter) + '</span>';
   }
+  function historyStamp(t){
+    if(t.type === 'transfer') return '<span class="stamp">&#8644;</span>';
+    return categoryStamp(t.category);
+  }
 
   function gaugeBar(spent, limit){
     var safeLimit = limit > 0 ? limit : 0;
@@ -682,11 +862,22 @@
 
   /* ---------- row/card builders ---------- */
   function historyRow(t){
+    if(t.type === 'transfer'){
+      var fromName = accountName(t.accountId), toName = accountName(t.toAccountId);
+      var tMeta = formatDate(t.date) + ' · ' + escapeHtml(fromName) + ' &#8594; ' + escapeHtml(toName) + (t.note ? ' · ' + escapeHtml(t.note) : '');
+      return '<div class="hist-row">' +
+        historyStamp(t) +
+        '<div class="hist-info"><div class="hist-cat">Transfer</div><div class="hist-meta">' + tMeta + '</div></div>' +
+        '<div class="hist-amt">' + fmt(t.amount) + '</div>' +
+        '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete transfer of ' + fmt(t.amount) + ' from ' + escapeHtml(fromName) + ' to ' + escapeHtml(toName) + ' on ' + formatDate(t.date) + '">×</button>' +
+        '</div>';
+    }
     var sign = t.type==='income' ? '+' : '-';
     var colorClass = t.type==='income' ? 'amt-pos' : 'amt-neg';
-    var metaBits = formatDate(t.date) + (t.note ? ' · ' + escapeHtml(t.note) : '');
+    var accountBit = state.accounts.length > 1 ? ' · ' + escapeHtml(accountName(t.accountId)) : '';
+    var metaBits = formatDate(t.date) + accountBit + (t.note ? ' · ' + escapeHtml(t.note) : '');
     return '<div class="hist-row">' +
-      categoryStamp(t.category) +
+      historyStamp(t) +
       '<div class="hist-info"><div class="hist-cat">' + escapeHtml(t.category) + '</div><div class="hist-meta">' + metaBits + '</div></div>' +
       '<div class="hist-amt ' + colorClass + '">' + sign + fmt(t.amount) + '</div>' +
       '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete ' + escapeHtml(t.category) + ' transaction of ' + fmt(t.amount) + ' on ' + formatDate(t.date) + '">×</button>' +
@@ -707,7 +898,7 @@
   }
 
   function addBudgetForm(){
-    var available = EXPENSE_CATS.filter(function(c){ return !(c in state.budgets); });
+    var available = state.categories.expense.filter(function(c){ return !(c in state.budgets); });
     if(available.length === 0) return '';
     var opts = available.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
     return '<div class="card add-form">' +
@@ -798,6 +989,16 @@
       '</div>';
   }
 
+  function accountBalancesHtml(){
+    if(state.accounts.length <= 1) return '';
+    var rows = state.accounts.map(function(a){
+      var bal = accountBalance(a.id);
+      return '<div class="acct-balance-row"><span class="acct-balance-name">' + escapeHtml(a.name) + '</span>' +
+        '<span class="acct-balance-amt ' + (bal < 0 ? 'amt-neg' : 'amt-pos') + '">' + fmt(bal) + '</span></div>';
+    }).join('');
+    return '<div class="card acct-balances">' + rows + '</div>';
+  }
+
   function renderHome(){
     var container = document.getElementById('view-home');
     var balance = totalBalance();
@@ -815,6 +1016,7 @@
     container.innerHTML =
       '<div class="balance-card"><div class="balance-label">Total Balance</div>' +
       '<div class="balance-amt ' + (balance < 0 ? 'amt-neg' : 'amt-pos') + '">' + fmt(balance) + '</div></div>' +
+      accountBalancesHtml() +
       '<div class="stat-row">' +
       '<div class="stat-card"><div class="stat-label">Income · This Month</div><div class="stat-amt amt-pos">' + fmt(inc) + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Spent · This Month</div><div class="stat-amt amt-neg">' + fmt(exp) + '</div></div>' +
@@ -842,22 +1044,89 @@
     container.innerHTML = '<div class="section-title">Savings Goals</div>' + empty + list + addGoalForm();
   }
 
+  function filteredHistoryTransactions(){
+    var q = historyFilter.query.trim().toLowerCase();
+    return state.transactions.filter(function(t){
+      if(historyFilter.accountId !== 'all'){
+        var matchesAccount = t.accountId === historyFilter.accountId || t.toAccountId === historyFilter.accountId;
+        if(!matchesAccount) return false;
+      }
+      if(!q) return true;
+      var haystack = (
+        (t.category || '') + ' ' + (t.note || '') + ' ' + accountName(t.accountId) +
+        (t.toAccountId ? ' ' + accountName(t.toAccountId) : '')
+      ).toLowerCase();
+      return haystack.indexOf(q) !== -1;
+    });
+  }
+
   function renderHistory(){
     var container = document.getElementById('view-history');
     var hasData = state.transactions.length > 0 || Object.keys(state.budgets).length > 0 || state.goals.length > 0;
+
+    var filterHtml = '';
     var listHtml;
     if(state.transactions.length === 0){
       listHtml = emptyState('No transactions yet', 'Tap the + button to log your first one.');
     } else {
-      var sorted = state.transactions.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); });
-      listHtml = '<div class="card history-list">' + sorted.map(historyRow).join('') + '</div>';
+      filterHtml = '<div class="form-row" style="margin-bottom:14px;">' +
+        '<input id="history-search" type="text" placeholder="Search notes or categories" aria-label="Search transactions" value="' + escapeHtml(historyFilter.query) + '">' +
+        (state.accounts.length > 1
+          ? '<select id="history-account-filter" aria-label="Filter by account" style="flex:0 0 128px;">' +
+              '<option value="all"' + (historyFilter.accountId === 'all' ? ' selected' : '') + '>All accounts</option>' +
+              state.accounts.map(function(a){
+                return '<option value="' + escapeHtml(a.id) + '"' + (historyFilter.accountId === a.id ? ' selected' : '') + '>' + escapeHtml(a.name) + '</option>';
+              }).join('') +
+            '</select>'
+          : '') +
+        '</div>';
+      var filtered = filteredHistoryTransactions();
+      var sorted = filtered.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); });
+      listHtml = sorted.length
+        ? '<div class="card history-list">' + sorted.map(historyRow).join('') + '</div>'
+        : '<div class="empty-inline">No transactions match your search.</div>';
     }
+
+    var accountsSection =
+      '<div class="section-head"><div class="section-title">Accounts</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">' + state.accounts.length + ' account' + (state.accounts.length === 1 ? '' : 's') + '.</p>' +
+      '<button id="open-accounts-btn" class="btn-secondary" type="button">Manage accounts</button></div>';
+
+    var categoriesSection =
+      '<div class="section-head"><div class="section-title">Categories</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Customize what shows up when you log a transaction.</p>' +
+      '<button id="open-categories-btn" class="btn-secondary" type="button">Manage categories</button></div>';
+
+    var recurringSection = state.recurring.length > 0
+      ? '<div class="section-head"><div class="section-title">Recurring</div></div>' + state.recurring.map(recurRow).join('')
+      : '';
+
     var backupSection =
       '<div class="section-head"><div class="section-title">Backup</div></div>' +
       '<div class="card"><p class="import-help" style="margin-bottom:12px;">Your data lives only on this device. Back it up so you don\'t lose it if you clear browser data or switch phones.</p>' +
       '<button id="open-backup-btn" class="btn-secondary" type="button">Backup &amp; restore</button></div>';
     var resetRow = hasData ? '<div class="reset-row"><button id="reset-btn" class="btn-text-danger" type="button">Clear all data</button></div>' : '';
-    container.innerHTML = '<div class="section-title">History</div>' + listHtml + backupSection + resetRow;
+
+    container.innerHTML = '<div class="section-title">History</div>' + filterHtml + listHtml +
+      accountsSection + categoriesSection + recurringSection + backupSection + resetRow;
+
+    var searchInput = document.getElementById('history-search');
+    if(searchInput){
+      searchInput.addEventListener('input', function(){
+        historyFilter.query = searchInput.value;
+        renderHistory();
+        var el = document.getElementById('history-search');
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      });
+    }
+    var acctFilter = document.getElementById('history-account-filter');
+    if(acctFilter){
+      acctFilter.addEventListener('change', function(){
+        historyFilter.accountId = acctFilter.value;
+        renderHistory();
+      });
+    }
   }
 
   function renderCurrentTab(){
@@ -911,6 +1180,8 @@
       if(openSheetElm.id === 'sheet') closeAddSheet();
       else if(openSheetElm.id === 'import-sheet') closeImportSheet();
       else if(openSheetElm.id === 'backup-sheet') closeBackupSheet();
+      else if(openSheetElm.id === 'accounts-sheet') closeAccountsSheet();
+      else if(openSheetElm.id === 'categories-sheet') closeCategoriesSheet();
       return;
     }
     if(e.key === 'Tab'){
@@ -923,25 +1194,46 @@
   });
 
   /* ---------- add transaction sheet ---------- */
+  var NEW_CATEGORY_VALUE = '__new__';
+
   function populateCategorySelect(){
-    var cats = txType === 'expense' ? EXPENSE_CATS : INCOME_CATS;
+    var cats = state.categories[txType === 'income' ? 'income' : 'expense'];
     var sel = document.getElementById('tx-category');
-    sel.innerHTML = cats.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
+    sel.innerHTML = cats.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('') +
+      '<option value="' + NEW_CATEGORY_VALUE + '">+ Add new category…</option>';
+    document.getElementById('tx-new-category-row').style.display = 'none';
+    document.getElementById('tx-new-category').value = '';
+  }
+  function populateAccountSelects(){
+    var opts = state.accounts.map(function(a){ return '<option value="' + escapeHtml(a.id) + '">' + escapeHtml(a.name) + '</option>'; }).join('');
+    document.getElementById('tx-account').innerHTML = opts;
+    document.getElementById('tx-from-account').innerHTML = opts;
+    document.getElementById('tx-to-account').innerHTML = opts;
+    if(state.accounts.length > 1) document.getElementById('tx-to-account').selectedIndex = 1;
   }
   function updateTypeToggle(){
     document.getElementById('type-expense').classList.toggle('active', txType === 'expense');
     document.getElementById('type-income').classList.toggle('active', txType === 'income');
+    document.getElementById('type-transfer').classList.toggle('active', txType === 'transfer');
+    var isTransfer = txType === 'transfer';
+    document.getElementById('tx-category-group').style.display = isTransfer ? 'none' : '';
+    document.getElementById('tx-account-group').style.display = (isTransfer || state.accounts.length <= 1) ? 'none' : '';
+    document.getElementById('tx-transfer-group').style.display = isTransfer ? 'block' : 'none';
+    document.getElementById('tx-repeat-group').style.display = isTransfer ? 'none' : '';
   }
   function setType(type){
     txType = type;
     updateTypeToggle();
-    populateCategorySelect();
+    if(type !== 'transfer') populateCategorySelect();
   }
   function openAddSheet(){
     txType = 'expense';
     document.getElementById('tx-amount').value = '';
     document.getElementById('tx-note').value = '';
     document.getElementById('tx-date').value = todayISO();
+    document.getElementById('tx-repeat').value = '';
+    document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
+    populateAccountSelects();
     updateTypeToggle();
     populateCategorySelect();
     openSheetEl(document.getElementById('sheet'), document.getElementById('overlay'), document.getElementById('tx-amount'));
@@ -949,22 +1241,86 @@
   function closeAddSheet(){
     closeSheetEl(document.getElementById('sheet'), document.getElementById('overlay'));
   }
+  function handleCategorySelectChange(){
+    var sel = document.getElementById('tx-category');
+    var row = document.getElementById('tx-new-category-row');
+    if(sel.value === NEW_CATEGORY_VALUE){
+      row.style.display = 'flex';
+      document.getElementById('tx-new-category').focus();
+    } else {
+      row.style.display = 'none';
+    }
+  }
+  async function addInlineCategory(){
+    var input = document.getElementById('tx-new-category');
+    var name = input.value.trim();
+    if(!name){ flashError2(input); return; }
+    var list = state.categories[txType === 'income' ? 'income' : 'expense'];
+    if(list.indexOf(name) === -1){
+      list.push(name);
+      try{ await saveCategories(); }
+      catch(e){ showToast('Could not save category'); return; }
+    }
+    populateCategorySelect();
+    document.getElementById('tx-category').value = name;
+    showToast('Category added');
+  }
+  function nextRecurDate(dateStr, frequency){
+    var d = new Date(dateStr + 'T00:00:00');
+    if(frequency === 'weekly'){ d.setDate(d.getDate() + 7); }
+    else{ d.setMonth(d.getMonth() + 1); }
+    var off = d.getTimezoneOffset();
+    var local = new Date(d.getTime() - off*60000);
+    return local.toISOString().slice(0,10);
+  }
   async function saveTransaction(){
     var amountEl = document.getElementById('tx-amount');
     var amountVal = parseFloat(amountEl.value);
     if(!amountVal || amountVal <= 0){ flashError2(amountEl); return; }
-    var category = document.getElementById('tx-category').value;
     var note = document.getElementById('tx-note').value.trim();
     var date = document.getElementById('tx-date').value || todayISO();
+
+    if(txType === 'transfer'){
+      var fromSel = document.getElementById('tx-from-account');
+      var toSel = document.getElementById('tx-to-account');
+      if(fromSel.value === toSel.value){ flashError2(toSel); showToast('Pick two different accounts'); return; }
+      var transferTx = {
+        id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+        type: 'transfer', amount: amountVal, accountId: fromSel.value, toAccountId: toSel.value,
+        note: note, date: date
+      };
+      state.transactions.unshift(transferTx);
+      try{
+        await saveTransactions();
+        closeAddSheet();
+        showToast('Transfer added');
+        renderCurrentTab();
+      }catch(e){ showToast('Could not save — try again'); }
+      return;
+    }
+
+    var categorySel = document.getElementById('tx-category');
+    if(categorySel.value === NEW_CATEGORY_VALUE){ flashError2(document.getElementById('tx-new-category')); return; }
+    var category = categorySel.value;
+    var accountId = state.accounts.length > 1 ? document.getElementById('tx-account').value : state.accounts[0].id;
+    var repeat = document.getElementById('tx-repeat').value;
     var newTx = {
       id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      type: txType, amount: amountVal, category: category, note: note, date: date
+      type: txType, amount: amountVal, category: category, accountId: accountId, note: note, date: date
     };
     state.transactions.unshift(newTx);
     try{
       await saveTransactions();
+      if(repeat){
+        state.recurring.push({
+          id: 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+          type: txType, amount: amountVal, category: category, accountId: accountId, note: note,
+          frequency: repeat, nextDate: nextRecurDate(date, repeat)
+        });
+        await saveRecurring();
+      }
       closeAddSheet();
-      showToast('Transaction added');
+      showToast(repeat ? 'Transaction added — repeats ' + repeat : 'Transaction added');
       renderCurrentTab();
     }catch(e){ showToast('Could not save — try again'); }
   }
@@ -1112,7 +1468,7 @@
     return local.toISOString().slice(0,10);
   }
 
-  function rowsToTransactions(rows, idx){
+  function rowsToTransactions(rows, idx, accountId){
     var out = [];
     for(var i=0;i<rows.length;i++){
       var r = rows[i];
@@ -1134,6 +1490,7 @@
         type: amt < 0 ? 'expense' : 'income',
         amount: Math.abs(amt),
         category: 'Other',
+        accountId: accountId,
         note: (desc || '').trim().slice(0,60),
         date: normalizeDate(dateStr)
       });
@@ -1151,6 +1508,15 @@
     pendingImport = [];
     resetImportBody();
     document.getElementById('import-confirm').disabled = true;
+    var accountRow = document.getElementById('import-account-row');
+    if(state.accounts.length > 1){
+      document.getElementById('import-account').innerHTML = state.accounts.map(function(a){
+        return '<option value="' + escapeHtml(a.id) + '">' + escapeHtml(a.name) + '</option>';
+      }).join('');
+      accountRow.style.display = '';
+    } else {
+      accountRow.style.display = 'none';
+    }
     openSheetEl(document.getElementById('import-sheet'), document.getElementById('import-overlay'), document.getElementById('csv-file-input'));
   }
   function closeImportSheet(){
@@ -1189,7 +1555,8 @@
         showImportError('Could not find an amount column. Try a standard export with Date, Description, and Amount columns.');
         return;
       }
-      pendingImport = rowsToTransactions(rows.slice(1), idx);
+      var importAccountId = state.accounts.length > 1 ? document.getElementById('import-account').value : state.accounts[0].id;
+      pendingImport = rowsToTransactions(rows.slice(1), idx, importAccountId);
       if(pendingImport.length === 0){ showImportError('No valid transactions were found in this file.'); return; }
       showImportPreview(pendingImport);
     };
@@ -1214,8 +1581,10 @@
 
   function exportBackup(){
     var payload = {
-      app: 'ledger', version: 1, exportedAt: new Date().toISOString(),
-      transactions: state.transactions, budgets: state.budgets, goals: state.goals
+      app: 'ledger', version: 2, exportedAt: new Date().toISOString(),
+      transactions: state.transactions, budgets: state.budgets, goals: state.goals,
+      accounts: state.accounts, categories: state.categories,
+      categoryColors: state.categoryColors, recurring: state.recurring
     };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -1255,9 +1624,11 @@
     var txCount = data.transactions.length;
     var budgetCount = Object.keys(data.budgets).length;
     var goalCount = data.goals.length;
+    var acctCount = data.accounts.length;
     document.getElementById('restore-body').innerHTML =
       '<p class="import-help">Backup from <strong>' + escapeHtml(dateLabel) + '</strong> — ' +
       txCount + ' transaction' + (txCount===1?'':'s') + ', ' +
+      acctCount + ' account' + (acctCount===1?'':'s') + ', ' +
       budgetCount + ' budget' + (budgetCount===1?'':'s') + ', ' +
       goalCount + ' goal' + (goalCount===1?'':'s') + '. <strong>This replaces everything currently on this device.</strong></p>';
     document.getElementById('restore-confirm').disabled = false;
@@ -1274,7 +1645,16 @@
         showRestoreError('That file doesn\'t look like a Ledger backup.');
         return;
       }
-      pendingRestore = { transactions: data.transactions, budgets: data.budgets || {}, goals: data.goals };
+      // Older backups (v1) predate accounts/categories/recurring — normalize falls
+      // back to sensible defaults so restoring an old file doesn't break anything.
+      var accounts = normalizeAccounts(data.accounts);
+      migrateTransactionAccounts(data.transactions, accounts);
+      pendingRestore = {
+        transactions: data.transactions, budgets: data.budgets || {}, goals: data.goals,
+        accounts: accounts, categories: normalizeCategories(data.categories),
+        categoryColors: (data.categoryColors && typeof data.categoryColors === 'object') ? data.categoryColors : {},
+        recurring: Array.isArray(data.recurring) ? data.recurring : []
+      };
       var dateLabel = data.exportedAt ? formatDate(String(data.exportedAt).slice(0,10)) : 'unknown date';
       showRestorePreview(pendingRestore, dateLabel);
     };
@@ -1283,16 +1663,152 @@
   }
   async function confirmRestore(){
     if(!pendingRestore) return;
-    state = { transactions: pendingRestore.transactions, budgets: pendingRestore.budgets, goals: pendingRestore.goals };
+    state = {
+      transactions: pendingRestore.transactions, budgets: pendingRestore.budgets, goals: pendingRestore.goals,
+      accounts: pendingRestore.accounts, categories: pendingRestore.categories,
+      categoryColors: pendingRestore.categoryColors, recurring: pendingRestore.recurring
+    };
     try{
       await saveTransactions();
       await saveBudgets();
       await saveGoals();
+      await saveAccounts();
+      await saveCategories();
+      await saveCategoryColors();
+      await saveRecurring();
       pendingRestore = null;
       closeBackupSheet();
       showToast('Backup restored');
       renderCurrentTab();
     }catch(e){ showToast('Could not restore backup'); }
+  }
+
+  /* ---------- accounts management ---------- */
+  function accountRow(a){
+    var bal = accountBalance(a.id);
+    var colorClass = bal < 0 ? 'amt-neg' : 'amt-pos';
+    return '<div class="card account-row" data-id="' + escapeHtml(a.id) + '">' +
+      '<div><div class="account-name">' + escapeHtml(a.name) + '</div>' +
+      '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div></div>' +
+      '<button class="icon-btn del-account" aria-label="Delete ' + escapeHtml(a.name) + ' account">×</button>' +
+      '</div>';
+  }
+  function renderAccountsList(){
+    document.getElementById('accounts-list').innerHTML = state.accounts.map(accountRow).join('');
+  }
+  function openAccountsSheet(){
+    renderAccountsList();
+    document.getElementById('new-account-name').value = '';
+    openSheetEl(document.getElementById('accounts-sheet'), document.getElementById('accounts-overlay'), document.getElementById('new-account-name'));
+  }
+  function closeAccountsSheet(){
+    closeSheetEl(document.getElementById('accounts-sheet'), document.getElementById('accounts-overlay'));
+  }
+  async function addAccount(){
+    var input = document.getElementById('new-account-name');
+    var name = input.value.trim();
+    if(!name){ flashError2(input); return; }
+    state.accounts.push({ id: 'acct_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name });
+    try{
+      await saveAccounts();
+      input.value = '';
+      renderAccountsList();
+      showToast('Account added');
+    }catch(e){ showToast('Could not save'); }
+  }
+  async function deleteAccount(id){
+    if(state.accounts.length <= 1){ showToast('You need at least one account'); return; }
+    var hasTx = state.transactions.some(function(t){ return t.accountId === id || t.toAccountId === id; });
+    if(hasTx){ showToast('Move or delete its transactions first'); return; }
+    state.accounts = state.accounts.filter(function(a){ return a.id !== id; });
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast('Account removed');
+    }catch(e){ showToast('Could not delete'); }
+  }
+
+  /* ---------- categories management ---------- */
+  function categoryChip(name, type){
+    return '<span class="chip" data-name="' + escapeHtml(name) + '" data-type="' + type + '">' + escapeHtml(name) +
+      '<button class="chip-del" type="button" aria-label="Delete ' + escapeHtml(name) + ' category">×</button></span>';
+  }
+  function renderCategoriesLists(){
+    document.getElementById('expense-categories-list').innerHTML =
+      '<div class="chip-list">' + state.categories.expense.map(function(c){ return categoryChip(c, 'expense'); }).join('') + '</div>';
+    document.getElementById('income-categories-list').innerHTML =
+      '<div class="chip-list">' + state.categories.income.map(function(c){ return categoryChip(c, 'income'); }).join('') + '</div>';
+  }
+  function openCategoriesSheet(){
+    renderCategoriesLists();
+    document.getElementById('new-expense-cat').value = '';
+    document.getElementById('new-income-cat').value = '';
+    openSheetEl(document.getElementById('categories-sheet'), document.getElementById('categories-overlay'), document.getElementById('new-expense-cat'));
+  }
+  function closeCategoriesSheet(){
+    closeSheetEl(document.getElementById('categories-sheet'), document.getElementById('categories-overlay'));
+  }
+  async function addCategory(type){
+    var input = document.getElementById(type === 'income' ? 'new-income-cat' : 'new-expense-cat');
+    var name = input.value.trim();
+    if(!name){ flashError2(input); return; }
+    var list = state.categories[type];
+    if(list.indexOf(name) !== -1){ showToast('Already have that category'); return; }
+    list.push(name);
+    try{
+      await saveCategories();
+      input.value = '';
+      renderCategoriesLists();
+      showToast('Category added');
+    }catch(e){ showToast('Could not save'); }
+  }
+  async function deleteCategory(name, type){
+    if(name === 'Other'){ showToast('"Other" can\'t be removed'); return; }
+    state.categories[type] = state.categories[type].filter(function(c){ return c !== name; });
+    try{
+      await saveCategories();
+      renderCategoriesLists();
+      showToast('Category removed');
+    }catch(e){ showToast('Could not delete'); }
+  }
+
+  /* ---------- recurring transactions ---------- */
+  // Catches up any rules whose next occurrence has arrived (or passed, if the
+  // app wasn't opened for a while) into real transactions. Bounded per rule so
+  // a very old nextDate can't spin into an unbounded loop.
+  function processRecurring(){
+    var today = todayISO();
+    var generated = 0;
+    var cap = 24;
+    state.recurring.forEach(function(rule){
+      var iterations = 0;
+      while(rule.nextDate <= today && iterations < cap){
+        state.transactions.unshift({
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+          type: rule.type, amount: rule.amount, category: rule.category, accountId: rule.accountId,
+          note: rule.note, date: rule.nextDate
+        });
+        rule.nextDate = nextRecurDate(rule.nextDate, rule.frequency);
+        generated++;
+        iterations++;
+      }
+    });
+    return generated;
+  }
+  function recurRow(r){
+    var freqLabel = r.frequency === 'weekly' ? 'Weekly' : 'Monthly';
+    var sign = r.type === 'income' ? '+' : '-';
+    var colorClass = r.type === 'income' ? 'amt-pos' : 'amt-neg';
+    return '<div class="card recur-row" data-id="' + r.id + '">' +
+      '<div class="recur-info"><div class="recur-title">' + escapeHtml(r.category) + '</div>' +
+      '<div class="recur-meta">' + freqLabel + ' · <span class="mono ' + colorClass + '">' + sign + fmt(r.amount) + '</span> · next ' + formatDate(r.nextDate) + '</div></div>' +
+      '<button class="icon-btn del-recurring" aria-label="Stop repeating ' + escapeHtml(r.category) + '">×</button>' +
+      '</div>';
+  }
+  async function deleteRecurring(id){
+    state.recurring = state.recurring.filter(function(r){ return r.id !== id; });
+    try{ await saveRecurring(); showToast('Recurring transaction removed'); renderCurrentTab(); }
+    catch(e){ showToast('Could not delete'); }
   }
 
   /* ---------- delegated click handling ---------- */
@@ -1325,12 +1841,29 @@
     var trendCol = target.closest('.trend-col');
     if(trendCol){ showToast(trendCol.getAttribute('aria-label')); return; }
 
+    var delRecurringBtn = target.closest('.del-recurring');
+    if(delRecurringBtn){ deleteRecurring(delRecurringBtn.closest('.recur-row').dataset.id); return; }
+
     if(target.id === 'add-budget-btn'){ addBudget(); return; }
     if(target.id === 'add-goal-btn'){ addGoal(); return; }
     if(target.id === 'reset-btn'){ handleReset(target); return; }
     if(target.id === 'open-backup-btn'){ openBackupSheet(); return; }
+    if(target.id === 'open-accounts-btn'){ openAccountsSheet(); return; }
+    if(target.id === 'open-categories-btn'){ openCategoriesSheet(); return; }
     if(target.id === 'link-budgets' || target.id === 'go-budgets'){ e.preventDefault(); switchTab('budgets'); return; }
     if(target.id === 'link-history'){ e.preventDefault(); switchTab('history'); return; }
+  });
+
+  document.getElementById('accounts-sheet').addEventListener('click', function(e){
+    var delBtn = e.target.closest('.del-account');
+    if(delBtn){ deleteAccount(delBtn.closest('.account-row').dataset.id); }
+  });
+  document.getElementById('categories-sheet').addEventListener('click', function(e){
+    var delBtn = e.target.closest('.chip-del');
+    if(delBtn){
+      var chip = delBtn.closest('.chip');
+      deleteCategory(chip.dataset.name, chip.dataset.type);
+    }
   });
 
   document.getElementById('app-content').addEventListener('keydown', function(e){
@@ -1348,6 +1881,9 @@
   document.getElementById('sheet-save').addEventListener('click', saveTransaction);
   document.getElementById('type-expense').addEventListener('click', function(){ setType('expense'); });
   document.getElementById('type-income').addEventListener('click', function(){ setType('income'); });
+  document.getElementById('type-transfer').addEventListener('click', function(){ setType('transfer'); });
+  document.getElementById('tx-category').addEventListener('change', handleCategorySelectChange);
+  document.getElementById('tx-new-category-add').addEventListener('click', addInlineCategory);
 
   document.getElementById('import-btn').addEventListener('click', openImportSheet);
   document.getElementById('import-overlay').addEventListener('click', closeImportSheet);
@@ -1359,6 +1895,15 @@
   document.getElementById('backup-cancel').addEventListener('click', closeBackupSheet);
   document.getElementById('restore-confirm').addEventListener('click', confirmRestore);
 
+  document.getElementById('accounts-overlay').addEventListener('click', closeAccountsSheet);
+  document.getElementById('accounts-close').addEventListener('click', closeAccountsSheet);
+  document.getElementById('add-account-btn').addEventListener('click', addAccount);
+
+  document.getElementById('categories-overlay').addEventListener('click', closeCategoriesSheet);
+  document.getElementById('categories-close').addEventListener('click', closeCategoriesSheet);
+  document.getElementById('add-expense-cat-btn').addEventListener('click', function(){ addCategory('expense'); });
+  document.getElementById('add-income-cat-btn').addEventListener('click', function(){ addCategory('income'); });
+
   /* ---------- init ---------- */
   async function init(){
     document.getElementById('month-label').textContent = monthLabel();
@@ -1368,9 +1913,17 @@
       navigator.storage.persist().catch(function(){});
     }
     await loadState();
+    var recurringGenerated = processRecurring();
+    if(recurringGenerated > 0){
+      await saveTransactions();
+      await saveRecurring();
+    }
     document.getElementById('loading').style.display = 'none';
     document.getElementById('app-content').style.display = 'flex';
     switchTab('home');
+    if(recurringGenerated > 0){
+      showToast(recurringGenerated === 1 ? 'Added 1 recurring transaction' : 'Added ' + recurringGenerated + ' recurring transactions');
+    }
   }
   init();
 
