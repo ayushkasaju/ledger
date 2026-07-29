@@ -319,8 +319,8 @@
     font-size:11px; color:var(--ink-soft); font-weight:500;
   }
   .account-type-badge:hover{border-color:var(--ink-soft); color:var(--ink);}
-  .account-type-toggle{margin:8px 0 0; max-width:230px; padding:2px;}
-  .account-type-toggle .type-btn{padding:6px 4px; font-size:12px;}
+  .account-type-toggle{margin:8px 0 0; max-width:290px; padding:2px;}
+  .account-type-toggle .type-btn{padding:6px 3px; font-size:11.5px;}
   .account-balance{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:8px;}
   .account-starting{font-size:12px; color:var(--ink-soft); margin-top:6px; cursor:pointer;}
   .account-starting:hover{color:var(--ink);}
@@ -520,9 +520,10 @@
       <button id="type-expense" class="type-btn active" type="button">Expense</button>
       <button id="type-income" class="type-btn" type="button">Income</button>
       <button id="type-transfer" class="type-btn" type="button">Transfer</button>
+      <button id="type-adjust" class="type-btn" type="button">Adjust</button>
     </div>
     <div class="form-group">
-      <label for="tx-amount">Amount</label>
+      <label for="tx-amount" id="tx-amount-label">Amount</label>
       <input id="tx-amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
     </div>
     <div id="tx-category-group" class="form-group">
@@ -607,8 +608,9 @@
     <div id="accounts-list" style="margin-bottom:14px;"></div>
     <div class="type-toggle" style="margin-bottom:10px;">
       <button id="new-account-type-bank" class="type-btn active" type="button">Bank</button>
-      <button id="new-account-type-credit" class="type-btn" type="button">Credit card</button>
+      <button id="new-account-type-credit" class="type-btn" type="button">Credit</button>
       <button id="new-account-type-loan" class="type-btn" type="button">Loan</button>
+      <button id="new-account-type-invest" class="type-btn" type="button">Invest</button>
     </div>
     <div class="form-row">
       <input id="new-account-name" type="text" placeholder="Account name" aria-label="Account name" maxlength="30">
@@ -684,11 +686,13 @@
   function accountTypeLabel(type){
     if(type === 'credit') return 'Credit card';
     if(type === 'loan') return 'Loan';
+    if(type === 'investment') return 'Investment';
     return 'Bank account';
   }
   // Credit cards and loans are both liabilities: starting balance is entered
   // and shown as a positive "amount owed," negated internally.
   function isLiabilityType(type){ return type === 'credit' || type === 'loan'; }
+  function hasInvestmentAccount(){ return state.accounts.some(function(a){ return a.type === 'investment'; }); }
   function normalizeCategories(obj){
     if(!obj || !Array.isArray(obj.expense) || !Array.isArray(obj.income)){
       return { expense: DEFAULT_EXPENSE_CATS.slice(), income: DEFAULT_INCOME_CATS.slice() };
@@ -796,11 +800,15 @@
   function totalBalance(){
     // A transfer moves money between your own accounts — net effect on total
     // net worth is zero by definition, so it's excluded here entirely (it's
-    // still counted per-account, in accountBalance).
+    // still counted per-account, in accountBalance). An adjustment (market
+    // gain/loss on an investment account) DOES count toward net worth — it's
+    // real — but is deliberately excluded from monthIncome/monthExpenses and
+    // the category charts, since it isn't earned income or discretionary spend.
     var startingSum = state.accounts.reduce(function(s,a){ return s + (a.startingBalance || 0); }, 0);
     var txSum = state.transactions.reduce(function(sum,t){
       if(t.type === 'income') return sum + t.amount;
       if(t.type === 'expense') return sum - t.amount;
+      if(t.type === 'adjustment') return sum + t.amount;
       return sum;
     }, 0);
     return startingSum + txSum;
@@ -811,6 +819,7 @@
     var txSum = state.transactions.reduce(function(sum,t){
       if(t.type === 'income' && t.accountId === accountId) return sum + t.amount;
       if(t.type === 'expense' && t.accountId === accountId) return sum - t.amount;
+      if(t.type === 'adjustment' && t.accountId === accountId) return sum + t.amount;
       if(t.type === 'transfer'){
         if(t.accountId === accountId) return sum - t.amount;
         if(t.toAccountId === accountId) return sum + t.amount;
@@ -900,6 +909,7 @@
         if(d > m.endOfMonth) return sum;
         if(t.type === 'income') return sum + t.amount;
         if(t.type === 'expense') return sum - t.amount;
+        if(t.type === 'adjustment') return sum + t.amount;
         return sum;
       }, 0);
     });
@@ -921,6 +931,7 @@
   }
   function historyStamp(t){
     if(t.type === 'transfer') return '<span class="stamp">&#8644;</span>';
+    if(t.type === 'adjustment') return '<span class="stamp">&plusmn;</span>';
     return categoryStamp(t.category);
   }
 
@@ -965,6 +976,18 @@
         '<div class="hist-amt">' + fmt(t.amount) + '</div>' +
         '<button class="icon-btn hist-edit" data-id="' + t.id + '" aria-label="Edit transfer of ' + fmt(t.amount) + ' from ' + escapeHtml(fromName) + ' to ' + escapeHtml(toName) + ' on ' + formatDate(t.date) + '">' + EDIT_ICON_SVG + '</button>' +
         '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete transfer of ' + fmt(t.amount) + ' from ' + escapeHtml(fromName) + ' to ' + escapeHtml(toName) + ' on ' + formatDate(t.date) + '">×</button>' +
+        '</div>';
+    }
+    if(t.type === 'adjustment'){
+      var adjAcctName = accountName(t.accountId);
+      var isGain = t.amount >= 0;
+      var adjMeta = formatDate(t.date) + ' · ' + escapeHtml(adjAcctName) + (t.note ? ' · ' + escapeHtml(t.note) : '');
+      return '<div class="hist-row">' +
+        historyStamp(t) +
+        '<div class="hist-info"><div class="hist-cat">Value Adjustment</div><div class="hist-meta">' + adjMeta + '</div></div>' +
+        '<div class="hist-amt ' + (isGain ? 'amt-pos' : 'amt-neg') + '">' + (isGain ? '+' : '-') + fmt(Math.abs(t.amount)) + '</div>' +
+        '<button class="icon-btn hist-edit" data-id="' + t.id + '" aria-label="Edit value adjustment for ' + escapeHtml(adjAcctName) + ' on ' + formatDate(t.date) + '">' + EDIT_ICON_SVG + '</button>' +
+        '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete value adjustment for ' + escapeHtml(adjAcctName) + ' on ' + formatDate(t.date) + '">×</button>' +
         '</div>';
     }
     var sign = t.type==='income' ? '+' : '-';
@@ -1142,7 +1165,7 @@
     if(state.accounts.length <= 1) return '';
     var rows = state.accounts.map(function(a){
       var bal = accountBalance(a.id);
-      var tag = isLiabilityType(a.type) ? '<span class="acct-balance-tag">' + accountTypeLabel(a.type).toLowerCase() + '</span>' : '';
+      var tag = (a.type && a.type !== 'bank') ? '<span class="acct-balance-tag">' + accountTypeLabel(a.type).toLowerCase() + '</span>' : '';
       return '<div class="acct-balance-row"><span class="acct-balance-name">' + escapeHtml(a.name) + tag + '</span>' +
         '<span class="acct-balance-amt ' + (bal < 0 ? 'amt-neg' : 'amt-pos') + '">' + fmt(bal) + '</span></div>';
     }).join('');
@@ -1411,16 +1434,28 @@
     document.getElementById('type-expense').classList.toggle('active', txType === 'expense');
     document.getElementById('type-income').classList.toggle('active', txType === 'income');
     document.getElementById('type-transfer').classList.toggle('active', txType === 'transfer');
+    document.getElementById('type-adjust').classList.toggle('active', txType === 'adjustment');
     var isTransfer = txType === 'transfer';
-    document.getElementById('tx-category-group').style.display = isTransfer ? 'none' : '';
-    document.getElementById('tx-account-group').style.display = (isTransfer || state.accounts.length <= 1) ? 'none' : '';
+    var isAdjustment = txType === 'adjustment';
+    document.getElementById('tx-category-group').style.display = (isTransfer || isAdjustment) ? 'none' : '';
+    // The account picker is normally only needed with 2+ accounts (otherwise
+    // there's nothing to choose), but an adjustment always needs it visible —
+    // it's directly overwriting a balance, so confirming which account matters
+    // even when there's only one.
+    var showAccountPicker = !isTransfer && (state.accounts.length > 1 || isAdjustment);
+    document.getElementById('tx-account-group').style.display = showAccountPicker ? '' : 'none';
     document.getElementById('tx-transfer-group').style.display = isTransfer ? 'block' : 'none';
-    document.getElementById('tx-repeat-group').style.display = isTransfer ? 'none' : '';
+    document.getElementById('tx-repeat-group').style.display = (isTransfer || isAdjustment) ? 'none' : '';
+    document.getElementById('tx-amount-label').textContent = isAdjustment ? 'New value' : 'Amount';
   }
   function setType(type){
     txType = type;
     updateTypeToggle();
     if(type !== 'transfer') populateCategorySelect();
+    if(type === 'adjustment'){
+      var acctSel = document.getElementById('tx-account');
+      document.getElementById('tx-amount').value = accountBalance(acctSel.value).toFixed(2);
+    }
   }
   function openAddSheet(){
     editingTxId = null;
@@ -1432,6 +1467,7 @@
     document.getElementById('tx-date').value = todayISO();
     document.getElementById('tx-repeat').value = '';
     document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
+    document.getElementById('type-adjust').style.display = hasInvestmentAccount() ? '' : 'none';
     populateAccountSelects();
     updateTypeToggle();
     populateCategorySelect();
@@ -1451,12 +1487,18 @@
     document.getElementById('tx-date').value = tx.date;
     document.getElementById('tx-repeat').value = '';
     document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
+    document.getElementById('type-adjust').style.display = hasInvestmentAccount() ? '' : 'none';
     populateAccountSelects();
     updateTypeToggle();
     document.getElementById('tx-repeat-group').style.display = 'none';
     if(txType === 'transfer'){
       document.getElementById('tx-from-account').value = tx.accountId;
       document.getElementById('tx-to-account').value = tx.toAccountId;
+    } else if(txType === 'adjustment'){
+      document.getElementById('tx-account').value = tx.accountId;
+      // Current total already includes this record's own past delta, so it's
+      // the correct "what it shows right now" prefill.
+      document.getElementById('tx-amount').value = accountBalance(tx.accountId).toFixed(2);
     } else {
       populateCategorySelect();
       document.getElementById('tx-category').value = tx.category;
@@ -1500,14 +1542,50 @@
     var local = new Date(d.getTime() - off*60000);
     return local.toISOString().slice(0,10);
   }
+  // An adjustment stores a signed delta, not the value the user typed. Given
+  // the account's balance *excluding* this record's own prior contribution
+  // (so editing the same adjustment twice doesn't double-count it), the delta
+  // is just "new value minus everything else already accounted for."
+  function computeAdjustmentDelta(newValue, targetAccountId, existingTxId){
+    var baseline = accountBalance(targetAccountId);
+    if(existingTxId){
+      var existing = state.transactions.find(function(t){ return t.id === existingTxId; });
+      if(existing && existing.type === 'adjustment' && existing.accountId === targetAccountId){
+        baseline -= existing.amount;
+      }
+    }
+    return newValue - baseline;
+  }
   async function saveTransaction(){
     var amountEl = document.getElementById('tx-amount');
     var amountVal = parseFloat(amountEl.value);
-    if(!amountVal || amountVal <= 0){ flashError2(amountEl); return; }
     var note = document.getElementById('tx-note').value.trim();
     var date = document.getElementById('tx-date').value || todayISO();
-
     var isEdit = !!editingTxId;
+
+    if(txType === 'adjustment'){
+      if(isNaN(amountVal) || amountVal < 0){ flashError2(amountEl); return; }
+      var adjAccountId = document.getElementById('tx-account').value;
+      var delta = computeAdjustmentDelta(amountVal, adjAccountId, editingTxId);
+      if(isEdit){
+        var existingAdj = state.transactions.find(function(t){ return t.id === editingTxId; });
+        existingAdj.accountId = adjAccountId; existingAdj.amount = delta; existingAdj.note = note; existingAdj.date = date;
+      } else {
+        state.transactions.unshift({
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+          type: 'adjustment', accountId: adjAccountId, amount: delta, note: note, date: date
+        });
+      }
+      try{
+        await saveTransactions();
+        closeAddSheet();
+        showToast(isEdit ? 'Adjustment updated' : 'Value adjustment recorded');
+        renderCurrentTab();
+      }catch(e){ showToast('Could not save — try again'); }
+      return;
+    }
+
+    if(!amountVal || amountVal <= 0){ flashError2(amountEl); return; }
 
     if(txType === 'transfer'){
       var fromSel = document.getElementById('tx-from-account');
@@ -1958,11 +2036,13 @@
   function editAccountType(container){
     var id = container.dataset.id;
     var acct = state.accounts.find(function(a){ return a.id === id; });
+    var isBank = !acct.type || acct.type === 'bank';
     container.innerHTML =
       '<div class="type-toggle account-type-toggle">' +
-        '<button class="type-btn' + (!isLiabilityType(acct.type) ? ' active' : '') + '" type="button" data-type="bank">Bank</button>' +
+        '<button class="type-btn' + (isBank ? ' active' : '') + '" type="button" data-type="bank">Bank</button>' +
         '<button class="type-btn' + (acct.type === 'credit' ? ' active' : '') + '" type="button" data-type="credit">Credit</button>' +
         '<button class="type-btn' + (acct.type === 'loan' ? ' active' : '') + '" type="button" data-type="loan">Loan</button>' +
+        '<button class="type-btn' + (acct.type === 'investment' ? ' active' : '') + '" type="button" data-type="investment">Invest</button>' +
       '</div>';
   }
   async function saveAccountType(id, type){
@@ -2034,6 +2114,7 @@
     document.getElementById('new-account-type-bank').classList.toggle('active', newAccountType === 'bank');
     document.getElementById('new-account-type-credit').classList.toggle('active', newAccountType === 'credit');
     document.getElementById('new-account-type-loan').classList.toggle('active', newAccountType === 'loan');
+    document.getElementById('new-account-type-invest').classList.toggle('active', newAccountType === 'investment');
   }
   function openAccountsSheet(){
     renderAccountsList();
@@ -2259,8 +2340,12 @@
   document.getElementById('type-expense').addEventListener('click', function(){ setType('expense'); });
   document.getElementById('type-income').addEventListener('click', function(){ setType('income'); });
   document.getElementById('type-transfer').addEventListener('click', function(){ setType('transfer'); });
+  document.getElementById('type-adjust').addEventListener('click', function(){ setType('adjustment'); });
   document.getElementById('tx-category').addEventListener('change', handleCategorySelectChange);
   document.getElementById('tx-new-category-add').addEventListener('click', addInlineCategory);
+  document.getElementById('tx-account').addEventListener('change', function(){
+    if(txType === 'adjustment') document.getElementById('tx-amount').value = accountBalance(this.value).toFixed(2);
+  });
 
   document.getElementById('import-btn').addEventListener('click', openImportSheet);
   document.getElementById('import-overlay').addEventListener('click', closeImportSheet);
@@ -2278,6 +2363,7 @@
   document.getElementById('new-account-type-bank').addEventListener('click', function(){ newAccountType = 'bank'; updateNewAccountTypeToggle(); });
   document.getElementById('new-account-type-credit').addEventListener('click', function(){ newAccountType = 'credit'; updateNewAccountTypeToggle(); });
   document.getElementById('new-account-type-loan').addEventListener('click', function(){ newAccountType = 'loan'; updateNewAccountTypeToggle(); });
+  document.getElementById('new-account-type-invest').addEventListener('click', function(){ newAccountType = 'investment'; updateNewAccountTypeToggle(); });
 
   document.getElementById('categories-overlay').addEventListener('click', closeCategoriesSheet);
   document.getElementById('categories-close').addEventListener('click', closeCategoriesSheet);
