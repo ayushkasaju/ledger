@@ -17,7 +17,8 @@ This version stores everything **in your phone's/browser's local storage** —
 there's no server, no account, no sync between devices. That means:
 - Your data stays completely private on your device
 - If you clear your browser's site data, or switch browsers/devices, it won't carry over
-- If that ever becomes a problem, ask to add a "backup/export" feature and it can be built in
+- Use **History → Backup & restore** to download a backup file periodically, and
+  to restore from one if you ever switch devices or clear site data
 
 ## Option A — Netlify Drop (easiest, no account strictly required)
 1. Go to **https://app.netlify.com/drop**

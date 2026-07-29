@@ -429,6 +429,22 @@
     </div>
   </div>
 
+  <div class="overlay" id="backup-overlay"></div>
+  <div class="sheet" id="backup-sheet" role="dialog" aria-modal="true" aria-labelledby="backup-sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="backup-sheet-title">Backup &amp; Restore</div>
+    <p class="import-help">Download everything — transactions, budgets, and goals — as a file you can keep safe and restore from later.</p>
+    <button id="export-backup-btn" class="btn-secondary" type="button">Download backup</button>
+    <p class="import-help" style="margin-top:20px;">Restore from a backup file. This replaces all data currently on this device.</p>
+    <div id="restore-body">
+      <input type="file" id="backup-file-input" accept=".json,application/json" class="file-input" aria-label="Choose backup file">
+    </div>
+    <div class="sheet-actions">
+      <button id="backup-cancel" class="btn-ghost" type="button">Close</button>
+      <button id="restore-confirm" class="btn-primary" type="button" disabled>Restore</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </div>
 
@@ -643,14 +659,20 @@
 
   function renderHistory(){
     var container = document.getElementById('view-history');
+    var hasData = state.transactions.length > 0 || Object.keys(state.budgets).length > 0 || state.goals.length > 0;
+    var listHtml;
     if(state.transactions.length === 0){
-      container.innerHTML = '<div class="section-title">History</div>' + emptyState('No transactions yet', 'Tap the + button to log your first one.');
-      return;
+      listHtml = emptyState('No transactions yet', 'Tap the + button to log your first one.');
+    } else {
+      var sorted = state.transactions.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); });
+      listHtml = '<div class="card history-list">' + sorted.map(historyRow).join('') + '</div>';
     }
-    var sorted = state.transactions.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); });
-    var rows = sorted.map(historyRow).join('');
-    container.innerHTML = '<div class="section-title">History</div><div class="card history-list">' + rows + '</div>' +
-      '<div class="reset-row"><button id="reset-btn" class="btn-text-danger" type="button">Clear all data</button></div>';
+    var backupSection =
+      '<div class="section-head"><div class="section-title">Backup</div></div>' +
+      '<div class="card"><p class="import-help" style="margin-bottom:12px;">Your data lives only on this device. Back it up so you don\'t lose it if you clear browser data or switch phones.</p>' +
+      '<button id="open-backup-btn" class="btn-secondary" type="button">Backup &amp; restore</button></div>';
+    var resetRow = hasData ? '<div class="reset-row"><button id="reset-btn" class="btn-text-danger" type="button">Clear all data</button></div>' : '';
+    container.innerHTML = '<div class="section-title">History</div>' + listHtml + backupSection + resetRow;
   }
 
   function renderCurrentTab(){
@@ -703,6 +725,7 @@
     if(e.key === 'Escape'){
       if(openSheetElm.id === 'sheet') closeAddSheet();
       else if(openSheetElm.id === 'import-sheet') closeImportSheet();
+      else if(openSheetElm.id === 'backup-sheet') closeBackupSheet();
       return;
     }
     if(e.key === 'Tab'){
@@ -1001,6 +1024,92 @@
     }catch(e){ showToast('Could not save imported transactions'); }
   }
 
+  /* ---------- backup & restore (full JSON snapshot, distinct from the CSV bank import) ---------- */
+  var pendingRestore = null;
+
+  function exportBackup(){
+    var payload = {
+      app: 'ledger', version: 1, exportedAt: new Date().toISOString(),
+      transactions: state.transactions, budgets: state.budgets, goals: state.goals
+    };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'ledger-backup-' + todayISO() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    showToast('Backup downloaded');
+  }
+  function resetRestoreBody(){
+    document.getElementById('restore-body').innerHTML =
+      '<input type="file" id="backup-file-input" accept=".json,application/json" class="file-input" aria-label="Choose backup file">';
+    document.getElementById('backup-file-input').addEventListener('change', handleBackupFile);
+    document.getElementById('restore-confirm').disabled = true;
+    pendingRestore = null;
+  }
+  function openBackupSheet(){
+    resetRestoreBody();
+    openSheetEl(document.getElementById('backup-sheet'), document.getElementById('backup-overlay'), document.getElementById('export-backup-btn'));
+  }
+  function closeBackupSheet(){
+    closeSheetEl(document.getElementById('backup-sheet'), document.getElementById('backup-overlay'));
+    pendingRestore = null;
+  }
+  function showRestoreError(msg){
+    document.getElementById('restore-body').innerHTML =
+      '<p class="import-help import-error">' + escapeHtml(msg) + '</p>' +
+      '<input type="file" id="backup-file-input" accept=".json,application/json" class="file-input" aria-label="Choose backup file">';
+    document.getElementById('backup-file-input').addEventListener('change', handleBackupFile);
+    document.getElementById('restore-confirm').disabled = true;
+    pendingRestore = null;
+  }
+  function showRestorePreview(data, dateLabel){
+    var txCount = data.transactions.length;
+    var budgetCount = Object.keys(data.budgets).length;
+    var goalCount = data.goals.length;
+    document.getElementById('restore-body').innerHTML =
+      '<p class="import-help">Backup from <strong>' + escapeHtml(dateLabel) + '</strong> — ' +
+      txCount + ' transaction' + (txCount===1?'':'s') + ', ' +
+      budgetCount + ' budget' + (budgetCount===1?'':'s') + ', ' +
+      goalCount + ' goal' + (goalCount===1?'':'s') + '. <strong>This replaces everything currently on this device.</strong></p>';
+    document.getElementById('restore-confirm').disabled = false;
+  }
+  function handleBackupFile(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    var reader = new FileReader();
+    reader.onload = function(ev){
+      var data;
+      try{ data = JSON.parse(String(ev.target.result || '')); }
+      catch(err){ showRestoreError('That file is not valid — it doesn\'t look like a backup.'); return; }
+      if(!data || typeof data !== 'object' || !Array.isArray(data.transactions) || typeof data.budgets !== 'object' || !Array.isArray(data.goals)){
+        showRestoreError('That file doesn\'t look like a Ledger backup.');
+        return;
+      }
+      pendingRestore = { transactions: data.transactions, budgets: data.budgets || {}, goals: data.goals };
+      var dateLabel = data.exportedAt ? formatDate(String(data.exportedAt).slice(0,10)) : 'unknown date';
+      showRestorePreview(pendingRestore, dateLabel);
+    };
+    reader.onerror = function(){ showRestoreError('Could not read that file — please try again.'); };
+    reader.readAsText(file);
+  }
+  async function confirmRestore(){
+    if(!pendingRestore) return;
+    state = { transactions: pendingRestore.transactions, budgets: pendingRestore.budgets, goals: pendingRestore.goals };
+    try{
+      await saveTransactions();
+      await saveBudgets();
+      await saveGoals();
+      pendingRestore = null;
+      closeBackupSheet();
+      showToast('Backup restored');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not restore backup'); }
+  }
+
   /* ---------- delegated click handling ---------- */
   document.getElementById('app-content').addEventListener('click', function(e){
     var target = e.target;
@@ -1031,6 +1140,7 @@
     if(target.id === 'add-budget-btn'){ addBudget(); return; }
     if(target.id === 'add-goal-btn'){ addGoal(); return; }
     if(target.id === 'reset-btn'){ handleReset(target); return; }
+    if(target.id === 'open-backup-btn'){ openBackupSheet(); return; }
     if(target.id === 'link-budgets' || target.id === 'go-budgets'){ e.preventDefault(); switchTab('budgets'); return; }
     if(target.id === 'link-history'){ e.preventDefault(); switchTab('history'); return; }
   });
@@ -1056,9 +1166,19 @@
   document.getElementById('import-cancel').addEventListener('click', closeImportSheet);
   document.getElementById('import-confirm').addEventListener('click', confirmImport);
 
+  document.getElementById('export-backup-btn').addEventListener('click', exportBackup);
+  document.getElementById('backup-overlay').addEventListener('click', closeBackupSheet);
+  document.getElementById('backup-cancel').addEventListener('click', closeBackupSheet);
+  document.getElementById('restore-confirm').addEventListener('click', confirmRestore);
+
   /* ---------- init ---------- */
   async function init(){
     document.getElementById('month-label').textContent = monthLabel();
+    // Ask the browser not to evict our data under storage pressure. Doesn't protect
+    // against the user clearing site data or losing the device — just against silent eviction.
+    if(navigator.storage && navigator.storage.persist){
+      navigator.storage.persist().catch(function(){});
+    }
     await loadState();
     document.getElementById('loading').style.display = 'none';
     document.getElementById('app-content').style.display = 'flex';
