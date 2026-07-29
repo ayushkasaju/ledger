@@ -245,6 +245,29 @@
   .trend-months{display:flex; margin:0 2px;}
   .trend-month-label{flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft);}
 
+  /* net worth trend — a single series that can go negative once debt is
+     factored in, so bars grow from a zero baseline in either direction
+     rather than always from the bottom like the income/expense trend. */
+  .networth-plot{position:relative; height:130px; margin:28px 2px 6px;}
+  .networth-gridline{position:absolute; left:0; right:0; height:1px; background:var(--line);}
+  .networth-gridline.zero{background:var(--ink-soft);}
+  .networth-gridline-label{
+    position:absolute; left:0; transform:translateY(-100%);
+    font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--ink-soft);
+    background:var(--card); padding-right:4px;
+  }
+  .networth-cols{position:absolute; inset:0; display:flex;}
+  .networth-col{
+    flex:1; height:100%; position:relative;
+    background:none; border:none; padding:0; border-radius:6px;
+  }
+  .networth-col:hover, .networth-col:focus-visible{background:rgba(27,58,47,0.05);}
+  .networth-bar{position:absolute; left:50%; transform:translateX(-50%); width:22px; min-height:2px;}
+  .networth-bar.pos{background:var(--teal-text); border-radius:4px 4px 0 0;}
+  .networth-bar.neg{background:var(--brick); border-radius:0 0 4px 4px;}
+  .networth-months{display:flex; margin:0 2px;}
+  .networth-month-label{flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft);}
+
   /* goal card */
   .goal-head{display:flex; align-items:center; justify-content:space-between;}
   .goal-name{font-weight:600; font-size:14.5px;}
@@ -647,6 +670,7 @@
   var toastTimer = null;
   var historyFilter = { query: '', accountId: 'all' };
   var newAccountType = 'bank';
+  var editingTxId = null;
 
   /* ---------- storage (standard localStorage — this is the standalone, self-hosted build) ---------- */
   // Shared fallback logic — used both on normal load and when restoring a
@@ -858,6 +882,30 @@
     return months;
   }
 
+  // Total balance (assets + liabilities, across all accounts) as of the end of
+  // each of the last 6 calendar months — a running historical snapshot, not
+  // just this month's activity. Transfers are excluded from the running sum
+  // the same way totalBalance() excludes them (net zero by definition).
+  function netWorthTrend(){
+    var now = new Date();
+    var startingSum = state.accounts.reduce(function(s,a){ return s + (a.startingBalance || 0); }, 0);
+    var months = [];
+    for(var i=5;i>=0;i--){
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ year: d.getFullYear(), month: d.getMonth(), endOfMonth: new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59), balance: startingSum });
+    }
+    months.forEach(function(m){
+      m.balance = startingSum + state.transactions.reduce(function(sum, t){
+        var d = new Date(t.date + 'T00:00:00');
+        if(d > m.endOfMonth) return sum;
+        if(t.type === 'income') return sum + t.amount;
+        if(t.type === 'expense') return sum - t.amount;
+        return sum;
+      }, 0);
+    });
+    return months;
+  }
+
   // Round up to a "nice" number (1/2/5 x 10^n) for gridline scale tops.
   function niceCeiling(n){
     if(n <= 0) return 10;
@@ -906,6 +954,7 @@
   function flashError(id){ flashError2(document.getElementById(id)); }
 
   /* ---------- row/card builders ---------- */
+  var EDIT_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="width:16px;height:16px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
   function historyRow(t){
     if(t.type === 'transfer'){
       var fromName = accountName(t.accountId), toName = accountName(t.toAccountId);
@@ -914,6 +963,7 @@
         historyStamp(t) +
         '<div class="hist-info"><div class="hist-cat">Transfer</div><div class="hist-meta">' + tMeta + '</div></div>' +
         '<div class="hist-amt">' + fmt(t.amount) + '</div>' +
+        '<button class="icon-btn hist-edit" data-id="' + t.id + '" aria-label="Edit transfer of ' + fmt(t.amount) + ' from ' + escapeHtml(fromName) + ' to ' + escapeHtml(toName) + ' on ' + formatDate(t.date) + '">' + EDIT_ICON_SVG + '</button>' +
         '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete transfer of ' + fmt(t.amount) + ' from ' + escapeHtml(fromName) + ' to ' + escapeHtml(toName) + ' on ' + formatDate(t.date) + '">×</button>' +
         '</div>';
     }
@@ -925,6 +975,7 @@
       historyStamp(t) +
       '<div class="hist-info"><div class="hist-cat">' + escapeHtml(t.category) + '</div><div class="hist-meta">' + metaBits + '</div></div>' +
       '<div class="hist-amt ' + colorClass + '">' + sign + fmt(t.amount) + '</div>' +
+      '<button class="icon-btn hist-edit" data-id="' + t.id + '" aria-label="Edit ' + escapeHtml(t.category) + ' transaction of ' + fmt(t.amount) + ' on ' + formatDate(t.date) + '">' + EDIT_ICON_SVG + '</button>' +
       '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete ' + escapeHtml(t.category) + ' transaction of ' + fmt(t.amount) + ' on ' + formatDate(t.date) + '">×</button>' +
       '</div>';
   }
@@ -1045,6 +1096,48 @@
       '</div>';
   }
 
+  function netWorthChartHtml(){
+    var months = netWorthTrend();
+    var balances = months.map(function(m){ return m.balance; });
+    var hasAnyNonZero = balances.some(function(b){ return b !== 0; });
+    if(!hasAnyNonZero){
+      return '<div class="section-head"><div class="section-title">Net Worth Trend</div></div>' +
+        '<div class="empty-inline">Not enough history yet — this fills in as you log transactions.</div>';
+    }
+    var rawMax = Math.max.apply(null, balances.concat(0));
+    var rawMin = Math.min.apply(null, balances.concat(0));
+    var scaleMax = rawMax > 0 ? niceCeiling(rawMax) : 0;
+    var scaleMin = rawMin < 0 ? -niceCeiling(-rawMin) : 0;
+    if(scaleMax === scaleMin){ scaleMax = 10; scaleMin = -10; }
+    var range = scaleMax - scaleMin;
+    var zeroPct = ((0 - scaleMin) / range) * 100;
+
+    var gridlinesHtml =
+      '<div class="networth-gridline zero" style="bottom:' + zeroPct + '%"></div>' +
+      '<div class="networth-gridline-label" style="bottom:' + zeroPct + '%">$0</div>' +
+      (scaleMax > 0 ? '<div class="networth-gridline" style="bottom:100%"></div><div class="networth-gridline-label" style="bottom:100%">' + fmtWhole(scaleMax) + '</div>' : '') +
+      (scaleMin < 0 ? '<div class="networth-gridline" style="bottom:0%"></div><div class="networth-gridline-label" style="bottom:0%">' + fmtWhole(scaleMin) + '</div>' : '');
+
+    var colsHtml = months.map(function(m, i){
+      var barTopPct = ((m.balance - scaleMin) / range) * 100;
+      var isPos = m.balance >= 0;
+      var bottomPct = isPos ? zeroPct : barTopPct;
+      var heightPct = isPos ? (barTopPct - zeroPct) : (zeroPct - barTopPct);
+      var label = MONTH_ABBR[m.month] + ' ' + m.year;
+      var aria = label + ': net worth ' + fmt(m.balance);
+      return '<button type="button" class="networth-col" data-idx="' + i + '" aria-label="' + escapeHtml(aria) + '">' +
+        '<div class="networth-bar ' + (isPos ? 'pos' : 'neg') + '" style="bottom:' + bottomPct + '%; height:' + heightPct + '%"></div>' +
+      '</button>';
+    }).join('');
+    var monthLabelsHtml = months.map(function(m){ return '<div class="networth-month-label">' + MONTH_ABBR[m.month] + '</div>'; }).join('');
+
+    return '<div class="section-head"><div class="section-title">Net Worth Trend</div></div>' +
+      '<div class="card">' +
+        '<div class="networth-plot">' + gridlinesHtml + '<div class="networth-cols">' + colsHtml + '</div></div>' +
+        '<div class="networth-months">' + monthLabelsHtml + '</div>' +
+      '</div>';
+  }
+
   function accountBalancesHtml(){
     if(state.accounts.length <= 1) return '';
     var rows = state.accounts.map(function(a){
@@ -1080,6 +1173,7 @@
       '</div>' +
       spendChartHtml() +
       trendChartHtml() +
+      netWorthChartHtml() +
       '<div class="section-head"><div class="section-title">Budgets</div><a href="#" class="link" id="link-budgets">View all</a></div>' +
       budgetSnapshot +
       '<div class="section-head"><div class="section-title">Recent Activity</div><a href="#" class="link" id="link-history">View all</a></div>' +
@@ -1117,14 +1211,50 @@
     });
   }
 
+  /* ---------- CSV export (complements the CSV import above) ---------- */
+  function csvEscape(val){
+    var s = String(val === undefined || val === null ? '' : val);
+    if(/[",\n]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+  function transactionsToCSV(transactions){
+    var header = ['Date', 'Type', 'Category', 'Account', 'To Account', 'Amount', 'Note'];
+    var rows = transactions.map(function(t){
+      var toAccName = t.type === 'transfer' ? accountName(t.toAccountId) : '';
+      var category = t.type === 'transfer' ? '' : (t.category || '');
+      var signedAmount = t.type === 'expense' ? -t.amount : t.amount;
+      return [t.date, t.type, category, accountName(t.accountId), toAccName, signedAmount, t.note || ''].map(csvEscape).join(',');
+    });
+    return header.map(csvEscape).join(',') + '\n' + rows.join('\n') + (rows.length ? '\n' : '');
+  }
+  function exportTransactionsCSV(){
+    var filtered = filteredHistoryTransactions();
+    if(filtered.length === 0){ showToast('No transactions to export'); return; }
+    var sorted = filtered.slice().sort(function(a,b){ return new Date(b.date) - new Date(a.date); });
+    var csv = transactionsToCSV(sorted);
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'ledger-transactions-' + todayISO() + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    showToast('Exported ' + filtered.length + ' transaction' + (filtered.length === 1 ? '' : 's'));
+  }
+
   function renderHistory(){
     var container = document.getElementById('view-history');
 
+    var titleHtml = '<div class="section-title">History</div>';
     var filterHtml = '';
     var listHtml;
     if(state.transactions.length === 0){
       listHtml = emptyState('No transactions yet', 'Tap the + button to log your first one.');
     } else {
+      titleHtml = '<div class="section-head" style="margin:0 0 14px;"><div class="section-title">History</div>' +
+        '<a href="#" class="link" id="export-csv-btn">Export CSV</a></div>';
       filterHtml = '<div class="form-row" style="margin-bottom:14px;">' +
         '<input id="history-search" type="text" placeholder="Search notes or categories" aria-label="Search transactions" value="' + escapeHtml(historyFilter.query) + '">' +
         (state.accounts.length > 1
@@ -1143,7 +1273,7 @@
         : '<div class="empty-inline">No transactions match your search.</div>';
     }
 
-    container.innerHTML = '<div class="section-title">History</div>' + filterHtml + listHtml;
+    container.innerHTML = titleHtml + filterHtml + listHtml;
 
     var searchInput = document.getElementById('history-search');
     if(searchInput){
@@ -1293,6 +1423,9 @@
     if(type !== 'transfer') populateCategorySelect();
   }
   function openAddSheet(){
+    editingTxId = null;
+    document.getElementById('sheet-title').textContent = 'Add Transaction';
+    document.getElementById('sheet-save').textContent = 'Save';
     txType = 'expense';
     document.getElementById('tx-amount').value = '';
     document.getElementById('tx-note').value = '';
@@ -1304,8 +1437,36 @@
     populateCategorySelect();
     openSheetEl(document.getElementById('sheet'), document.getElementById('overlay'), document.getElementById('tx-amount'));
   }
+  // Reuses the same sheet, pre-filled, to edit a transaction in place rather
+  // than requiring delete-and-recreate. Repeat is hidden — setting up a
+  // recurring rule is a creation-time concept, not something retrofitted onto
+  // an edit of a single past transaction.
+  function openEditSheet(tx){
+    editingTxId = tx.id;
+    document.getElementById('sheet-title').textContent = 'Edit Transaction';
+    document.getElementById('sheet-save').textContent = 'Save Changes';
+    txType = tx.type;
+    document.getElementById('tx-amount').value = tx.amount;
+    document.getElementById('tx-note').value = tx.note || '';
+    document.getElementById('tx-date').value = tx.date;
+    document.getElementById('tx-repeat').value = '';
+    document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
+    populateAccountSelects();
+    updateTypeToggle();
+    document.getElementById('tx-repeat-group').style.display = 'none';
+    if(txType === 'transfer'){
+      document.getElementById('tx-from-account').value = tx.accountId;
+      document.getElementById('tx-to-account').value = tx.toAccountId;
+    } else {
+      populateCategorySelect();
+      document.getElementById('tx-category').value = tx.category;
+      if(state.accounts.length > 1) document.getElementById('tx-account').value = tx.accountId;
+    }
+    openSheetEl(document.getElementById('sheet'), document.getElementById('overlay'), document.getElementById('tx-amount'));
+  }
   function closeAddSheet(){
     closeSheetEl(document.getElementById('sheet'), document.getElementById('overlay'));
+    editingTxId = null;
   }
   function handleCategorySelectChange(){
     var sel = document.getElementById('tx-category');
@@ -1346,20 +1507,27 @@
     var note = document.getElementById('tx-note').value.trim();
     var date = document.getElementById('tx-date').value || todayISO();
 
+    var isEdit = !!editingTxId;
+
     if(txType === 'transfer'){
       var fromSel = document.getElementById('tx-from-account');
       var toSel = document.getElementById('tx-to-account');
       if(fromSel.value === toSel.value){ flashError2(toSel); showToast('Pick two different accounts'); return; }
-      var transferTx = {
-        id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-        type: 'transfer', amount: amountVal, accountId: fromSel.value, toAccountId: toSel.value,
-        note: note, date: date
-      };
-      state.transactions.unshift(transferTx);
+      if(isEdit){
+        var existingTransfer = state.transactions.find(function(t){ return t.id === editingTxId; });
+        existingTransfer.amount = amountVal; existingTransfer.accountId = fromSel.value;
+        existingTransfer.toAccountId = toSel.value; existingTransfer.note = note; existingTransfer.date = date;
+      } else {
+        state.transactions.unshift({
+          id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+          type: 'transfer', amount: amountVal, accountId: fromSel.value, toAccountId: toSel.value,
+          note: note, date: date
+        });
+      }
       try{
         await saveTransactions();
         closeAddSheet();
-        showToast('Transfer added');
+        showToast(isEdit ? 'Transfer updated' : 'Transfer added');
         renderCurrentTab();
       }catch(e){ showToast('Could not save — try again'); }
       return;
@@ -1370,14 +1538,20 @@
     var category = categorySel.value;
     var accountId = state.accounts.length > 1 ? document.getElementById('tx-account').value : state.accounts[0].id;
     var repeat = document.getElementById('tx-repeat').value;
-    var newTx = {
-      id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
-      type: txType, amount: amountVal, category: category, accountId: accountId, note: note, date: date
-    };
-    state.transactions.unshift(newTx);
+
+    if(isEdit){
+      var existingTx = state.transactions.find(function(t){ return t.id === editingTxId; });
+      existingTx.type = txType; existingTx.amount = amountVal; existingTx.category = category;
+      existingTx.accountId = accountId; existingTx.note = note; existingTx.date = date;
+    } else {
+      state.transactions.unshift({
+        id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+        type: txType, amount: amountVal, category: category, accountId: accountId, note: note, date: date
+      });
+    }
     try{
       await saveTransactions();
-      if(repeat){
+      if(repeat && !isEdit){
         state.recurring.push({
           id: 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
           type: txType, amount: amountVal, category: category, accountId: accountId, note: note,
@@ -1386,7 +1560,7 @@
         await saveRecurring();
       }
       closeAddSheet();
-      showToast(repeat ? 'Transaction added — repeats ' + repeat : 'Transaction added');
+      showToast(isEdit ? 'Transaction updated' : (repeat ? 'Transaction added — repeats ' + repeat : 'Transaction added'));
       renderCurrentTab();
     }catch(e){ showToast('Could not save — try again'); }
   }
@@ -1983,6 +2157,13 @@
     var target = e.target;
     if(target.tagName === 'INPUT' || target.tagName === 'SELECT') return;
 
+    var histEdit = target.closest('.hist-edit');
+    if(histEdit){
+      var editTx = state.transactions.find(function(t){ return t.id === histEdit.dataset.id; });
+      if(editTx) openEditSheet(editTx);
+      return;
+    }
+
     var histDel = target.closest('.hist-del');
     if(histDel){ deleteTransaction(histDel.dataset.id); return; }
 
@@ -2008,6 +2189,9 @@
     var trendCol = target.closest('.trend-col');
     if(trendCol){ showToast(trendCol.getAttribute('aria-label')); return; }
 
+    var networthCol = target.closest('.networth-col');
+    if(networthCol){ showToast(networthCol.getAttribute('aria-label')); return; }
+
     var delRecurringBtn = target.closest('.del-recurring');
     if(delRecurringBtn){ deleteRecurring(delRecurringBtn.closest('.recur-row').dataset.id); return; }
 
@@ -2019,6 +2203,7 @@
     if(target.id === 'open-categories-btn'){ openCategoriesSheet(); return; }
     if(target.id === 'link-budgets' || target.id === 'go-budgets'){ e.preventDefault(); switchTab('budgets'); return; }
     if(target.id === 'link-history'){ e.preventDefault(); switchTab('history'); return; }
+    if(target.id === 'export-csv-btn'){ e.preventDefault(); exportTransactionsCSV(); return; }
   });
 
   document.getElementById('accounts-sheet').addEventListener('click', function(e){
