@@ -287,8 +287,11 @@
 
   /* account row (accounts management sheet) */
   .account-row{display:flex; align-items:center; justify-content:space-between; gap:10px;}
-  .account-name{font-weight:600; font-size:14px;}
-  .account-balance{font-family:'IBM Plex Mono',monospace; font-size:12.5px; margin-top:2px;}
+  .account-name-edit{font-weight:600; font-size:14px; cursor:pointer;}
+  .account-name-edit:hover{color:var(--teal-text);}
+  .account-balance{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:8px;}
+  .account-starting{font-size:12px; color:var(--ink-soft); margin-top:6px; cursor:pointer;}
+  .account-starting:hover{color:var(--ink);}
 
   /* account balance breakdown (home) */
   .acct-balances{margin-bottom:16px;}
@@ -626,7 +629,7 @@
   // backup (including older backups from before accounts/categories existed).
   function normalizeAccounts(list){
     if(!Array.isArray(list) || list.length === 0){
-      return [{ id: 'acct_default', name: 'Main Account' }];
+      return [{ id: 'acct_default', name: 'Main Account', startingBalance: 0 }];
     }
     return list;
   }
@@ -738,14 +741,18 @@
     // A transfer moves money between your own accounts — net effect on total
     // net worth is zero by definition, so it's excluded here entirely (it's
     // still counted per-account, in accountBalance).
-    return state.transactions.reduce(function(sum,t){
+    var startingSum = state.accounts.reduce(function(s,a){ return s + (a.startingBalance || 0); }, 0);
+    var txSum = state.transactions.reduce(function(sum,t){
       if(t.type === 'income') return sum + t.amount;
       if(t.type === 'expense') return sum - t.amount;
       return sum;
     }, 0);
+    return startingSum + txSum;
   }
   function accountBalance(accountId){
-    return state.transactions.reduce(function(sum,t){
+    var acct = state.accounts.find(function(a){ return a.id === accountId; });
+    var starting = acct ? (acct.startingBalance || 0) : 0;
+    var txSum = state.transactions.reduce(function(sum,t){
       if(t.type === 'income' && t.accountId === accountId) return sum + t.amount;
       if(t.type === 'expense' && t.accountId === accountId) return sum - t.amount;
       if(t.type === 'transfer'){
@@ -754,6 +761,7 @@
       }
       return sum;
     }, 0);
+    return starting + txSum;
   }
   function monthIncome(){
     return currentMonthTransactions().filter(function(t){ return t.type==='income'; }).reduce(function(s,t){ return s+t.amount; }, 0);
@@ -1687,11 +1695,63 @@
   function accountRow(a){
     var bal = accountBalance(a.id);
     var colorClass = bal < 0 ? 'amt-neg' : 'amt-pos';
-    return '<div class="card account-row" data-id="' + escapeHtml(a.id) + '">' +
-      '<div><div class="account-name">' + escapeHtml(a.name) + '</div>' +
-      '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div></div>' +
-      '<button class="icon-btn del-account" aria-label="Delete ' + escapeHtml(a.name) + ' account">×</button>' +
+    var starting = a.startingBalance || 0;
+    return '<div class="card account-card" data-id="' + escapeHtml(a.id) + '">' +
+      '<div class="account-row">' +
+        '<div class="account-name-edit" role="button" tabindex="0" aria-label="Rename ' + escapeHtml(a.name) + ' account">' + escapeHtml(a.name) + '</div>' +
+        '<button class="icon-btn del-account" aria-label="Delete ' + escapeHtml(a.name) + ' account">×</button>' +
+      '</div>' +
+      '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div>' +
+      '<div class="account-starting" role="button" tabindex="0" aria-label="Edit starting balance for ' + escapeHtml(a.name) + ', currently ' + fmt(starting) + '">Starting balance: <span class="mono">' + fmt(starting) + '</span></div>' +
       '</div>';
+  }
+  function editAccountName(card){
+    var id = card.dataset.id;
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    var el = card.querySelector('.account-name-edit');
+    el.removeAttribute('role');
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
+    el.innerHTML = '<input class="inline-edit" type="text" value="' + escapeHtml(acct.name) + '" maxlength="30" aria-label="Account name" style="width:150px;"> <button class="btn-tiny save-account-name" type="button">Save</button>';
+    el.querySelector('.inline-edit').focus();
+  }
+  async function saveAccountName(card){
+    var id = card.dataset.id;
+    var input = card.querySelector('.account-name-edit .inline-edit');
+    var name = input.value.trim();
+    if(!name){ flashError2(input); return; }
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    acct.name = name;
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast('Account renamed');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not save'); }
+  }
+  function editAccountStarting(card){
+    var id = card.dataset.id;
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    var el = card.querySelector('.account-starting');
+    el.removeAttribute('role');
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
+    el.innerHTML = 'Starting balance: <input class="inline-edit" type="number" inputmode="decimal" value="' + (acct.startingBalance || 0) + '" step="0.01" aria-label="Starting balance for ' + escapeHtml(acct.name) + '"> <button class="btn-tiny save-account-starting" type="button">Save</button>';
+    el.querySelector('.inline-edit').focus();
+  }
+  async function saveAccountStarting(card){
+    var id = card.dataset.id;
+    var input = card.querySelector('.account-starting .inline-edit');
+    var val = parseFloat(input.value);
+    if(isNaN(val)){ flashError2(input); return; }
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    acct.startingBalance = val;
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast('Starting balance updated');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not save'); }
   }
   function renderAccountsList(){
     document.getElementById('accounts-list').innerHTML = state.accounts.map(accountRow).join('');
@@ -1708,7 +1768,7 @@
     var input = document.getElementById('new-account-name');
     var name = input.value.trim();
     if(!name){ flashError2(input); return; }
-    state.accounts.push({ id: 'acct_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name });
+    state.accounts.push({ id: 'acct_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, startingBalance: 0 });
     try{
       await saveAccounts();
       input.value = '';
@@ -1856,7 +1916,26 @@
 
   document.getElementById('accounts-sheet').addEventListener('click', function(e){
     var delBtn = e.target.closest('.del-account');
-    if(delBtn){ deleteAccount(delBtn.closest('.account-row').dataset.id); }
+    if(delBtn){ deleteAccount(delBtn.closest('.account-card').dataset.id); return; }
+
+    var saveNameBtn = e.target.closest('.save-account-name');
+    if(saveNameBtn){ saveAccountName(saveNameBtn.closest('.account-card')); return; }
+
+    var saveStartingBtn = e.target.closest('.save-account-starting');
+    if(saveStartingBtn){ saveAccountStarting(saveStartingBtn.closest('.account-card')); return; }
+
+    var nameEdit = e.target.closest('.account-name-edit');
+    if(nameEdit && !nameEdit.querySelector('.inline-edit')){ editAccountName(nameEdit.closest('.account-card')); return; }
+
+    var startingEdit = e.target.closest('.account-starting');
+    if(startingEdit && !startingEdit.querySelector('.inline-edit')){ editAccountStarting(startingEdit.closest('.account-card')); return; }
+  });
+  document.getElementById('accounts-sheet').addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var nameEdit = e.target.closest('.account-name-edit[role="button"]');
+    if(nameEdit){ e.preventDefault(); editAccountName(nameEdit.closest('.account-card')); return; }
+    var startingEdit = e.target.closest('.account-starting[role="button"]');
+    if(startingEdit){ e.preventDefault(); editAccountStarting(startingEdit.closest('.account-card')); }
   });
   document.getElementById('categories-sheet').addEventListener('click', function(e){
     var delBtn = e.target.closest('.chip-del');
