@@ -28,6 +28,16 @@
     --focus:#1B3A2F;
     --shadow:0 1px 2px rgba(27,58,47,0.06), 0 4px 14px rgba(27,58,47,0.06);
     --nav-h:64px;
+    /* categorical chart palette — 6 hues, fixed order, validated for CVD separation
+       and contrast against --card (see scripts/validate_palette.js in the dataviz
+       skill); do not add a 7th hue or reorder — extra categories fold into --cat-other */
+    --cat-1:#a73447;
+    --cat-2:#bd821a;
+    --cat-3:#49782a;
+    --cat-4:#25a6a6;
+    --cat-5:#2e64a6;
+    --cat-6:#a16fb8;
+    --cat-other:#767165;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:var(--paper);}
@@ -197,6 +207,43 @@
   .gauge-fill.warn{background:var(--gold);}
   .gauge-fill.over{background:var(--brick);}
   .tick{position:absolute; top:0; bottom:0; width:1px; background:rgba(27,58,47,0.15);}
+
+  /* spending-by-category chart */
+  .spend-row{margin-bottom:14px;}
+  .spend-row:last-child{margin-bottom:0;}
+  .spend-row-head{display:flex; align-items:baseline; justify-content:space-between; margin-bottom:5px; gap:8px;}
+  .spend-cat-name{display:flex; align-items:center; gap:7px; font-size:13.5px; font-weight:600; min-width:0;}
+  .spend-cat-name span.label{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .spend-swatch{width:10px; height:10px; border-radius:3px; flex-shrink:0;}
+  .spend-figures{display:flex; align-items:baseline; gap:7px; flex-shrink:0;}
+  .spend-amt{font-family:'IBM Plex Mono',monospace; font-size:13px; font-weight:600;}
+  .spend-pct{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft);}
+  .spend-track{height:10px; background:var(--paper); border-radius:0 4px 4px 0; border:1px solid var(--line); border-left:none; overflow:hidden;}
+  .spend-fill{height:100%; border-radius:0 4px 4px 0; transition:width 0.4s ease;}
+
+  /* 6-month income/expense trend chart */
+  .trend-legend{display:flex; gap:16px; margin-bottom:14px;}
+  .trend-legend-item{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--ink-soft);}
+  .trend-legend-item .spend-swatch{border-radius:2px;}
+  .trend-plot{position:relative; height:130px; margin:28px 2px 6px;}
+  .trend-gridline{position:absolute; left:0; right:0; height:1px; background:var(--line);}
+  .trend-gridline-label{
+    position:absolute; left:0; transform:translateY(-100%);
+    font-family:'IBM Plex Mono',monospace; font-size:10px; color:var(--ink-soft);
+    background:var(--card); padding-right:4px;
+  }
+  .trend-cols{position:absolute; inset:0; display:flex; align-items:flex-end;}
+  .trend-col{
+    flex:1; height:100%; display:flex; align-items:flex-end; justify-content:center;
+    background:none; border:none; padding:0; border-radius:6px;
+  }
+  .trend-col:hover, .trend-col:focus-visible{background:rgba(27,58,47,0.05);}
+  .trend-bars{display:flex; align-items:flex-end; gap:3px; height:100%;}
+  .trend-bar{width:13px; border-radius:4px 4px 0 0; min-height:2px; transition:height 0.4s ease;}
+  .trend-bar.income{background:var(--teal-text);}
+  .trend-bar.expense{background:var(--brick);}
+  .trend-months{display:flex; margin:0 2px;}
+  .trend-month-label{flex:1; text-align:center; font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--ink-soft);}
 
   /* goal card */
   .goal-head{display:flex; align-items:center; justify-content:space-between;}
@@ -454,6 +501,20 @@
 
   var EXPENSE_CATS = ['Food & Dining','Transport','Housing','Utilities','Entertainment','Shopping','Health','Education','Other'];
   var INCOME_CATS = ['Salary','Freelance','Gift','Investment','Other'];
+  // Fixed name -> chart color. Only 6 categories get a distinct identity color
+  // (the palette is validated for CVD-safe separation at 6 slots — see the
+  // --cat-* custom properties); everything else folds into the neutral "Other"
+  // bucket in the chart, same as the literal "Other" category does.
+  var CATEGORY_COLOR_MAP = {
+    'Food & Dining': 'var(--cat-1)',
+    'Transport': 'var(--cat-2)',
+    'Housing': 'var(--cat-3)',
+    'Shopping': 'var(--cat-4)',
+    'Entertainment': 'var(--cat-5)',
+    'Health': 'var(--cat-6)'
+  };
+  var CATEGORY_OTHER_COLOR = 'var(--cat-other)';
+  var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
   var state = { transactions: [], budgets: {}, goals: [] };
   var activeTab = 'home';
@@ -523,6 +584,66 @@
   }
   function categorySpent(cat){
     return currentMonthTransactions().filter(function(t){ return t.type==='expense' && t.category===cat; }).reduce(function(s,t){ return s+t.amount; }, 0);
+  }
+
+  /* ---------- chart data ---------- */
+  // Spending by category, current month. Named categories with a fixed color
+  // (CATEGORY_COLOR_MAP) always keep their identity; everything else — including
+  // the literal "Other" category — is combined into one neutral "Other" row.
+  // Color always follows the category name, never its rank, so a category's
+  // color can't change month to month just because the totals reshuffled.
+  function spendingByCategory(){
+    var totals = {};
+    currentMonthTransactions().forEach(function(t){
+      if(t.type !== 'expense') return;
+      totals[t.category] = (totals[t.category] || 0) + t.amount;
+    });
+    var rows = [];
+    var otherTotal = 0;
+    Object.keys(totals).forEach(function(cat){
+      if(CATEGORY_COLOR_MAP[cat]){
+        rows.push({ name: cat, amount: totals[cat], color: CATEGORY_COLOR_MAP[cat] });
+      } else {
+        otherTotal += totals[cat];
+      }
+    });
+    if(otherTotal > 0){
+      rows.push({ name: 'Other', amount: otherTotal, color: CATEGORY_OTHER_COLOR });
+    }
+    // Other's color is always the fixed neutral (never a ranked hue), but it
+    // still sorts into its natural position by amount like everything else.
+    rows.sort(function(a,b){ return b.amount - a.amount; });
+    return rows;
+  }
+
+  // Last 6 calendar months (oldest first) of income vs. expense totals, for the trend chart.
+  function monthlyTrend(){
+    var now = new Date();
+    var months = [];
+    for(var i=5;i>=0;i--){
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push({ year: d.getFullYear(), month: d.getMonth(), income: 0, expense: 0 });
+    }
+    state.transactions.forEach(function(t){
+      var d = new Date(t.date + 'T00:00:00');
+      for(var i=0;i<months.length;i++){
+        if(months[i].year === d.getFullYear() && months[i].month === d.getMonth()){
+          if(t.type === 'income') months[i].income += t.amount;
+          else months[i].expense += t.amount;
+          break;
+        }
+      }
+    });
+    return months;
+  }
+
+  // Round up to a "nice" number (1/2/5 x 10^n) for gridline scale tops.
+  function niceCeiling(n){
+    if(n <= 0) return 10;
+    var pow = Math.pow(10, Math.floor(Math.log(n) / Math.LN10));
+    var frac = n / pow;
+    var niceFrac = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+    return niceFrac * pow;
   }
 
   function categoryStamp(cat){
@@ -615,6 +736,68 @@
   }
 
   /* ---------- view renderers ---------- */
+  function fmtWhole(n){ return '$' + Math.round(n || 0).toLocaleString('en-US'); }
+
+  function spendChartHtml(){
+    var rows = spendingByCategory();
+    if(rows.length === 0){
+      return '<div class="section-head"><div class="section-title">Spending by Category</div></div>' +
+        '<div class="empty-inline">No expenses logged yet this month.</div>';
+    }
+    var total = rows.reduce(function(s,r){ return s + r.amount; }, 0);
+    var maxAmt = Math.max.apply(null, rows.map(function(r){ return r.amount; }));
+    var rowsHtml = rows.map(function(r){
+      var pct = total > 0 ? Math.round((r.amount / total) * 100) : 0;
+      var widthPct = maxAmt > 0 ? (r.amount / maxAmt) * 100 : 0;
+      return '<div class="spend-row">' +
+        '<div class="spend-row-head">' +
+          '<div class="spend-cat-name"><span class="spend-swatch" style="background:' + r.color + '"></span><span class="label">' + escapeHtml(r.name) + '</span></div>' +
+          '<div class="spend-figures"><span class="spend-amt">' + fmt(r.amount) + '</span><span class="spend-pct">' + pct + '%</span></div>' +
+        '</div>' +
+        '<div class="spend-track"><div class="spend-fill" style="width:' + widthPct + '%; background:' + r.color + '"></div></div>' +
+      '</div>';
+    }).join('');
+    return '<div class="section-head"><div class="section-title">Spending by Category</div></div>' +
+      '<div class="card">' + rowsHtml + '</div>';
+  }
+
+  function trendChartHtml(){
+    var months = monthlyTrend();
+    var maxVal = 0;
+    months.forEach(function(m){ maxVal = Math.max(maxVal, m.income, m.expense); });
+    if(maxVal <= 0){
+      return '<div class="section-head"><div class="section-title">6-Month Trend</div></div>' +
+        '<div class="empty-inline">Not enough history yet — this fills in as you log transactions.</div>';
+    }
+    var scaleTop = niceCeiling(maxVal);
+    var gridlinesHtml = [0.25, 0.5, 0.75, 1].map(function(f){
+      return '<div class="trend-gridline" style="bottom:' + (f * 100) + '%"></div>' +
+        '<div class="trend-gridline-label" style="bottom:' + (f * 100) + '%">' + fmtWhole(scaleTop * f) + '</div>';
+    }).join('');
+    var colsHtml = months.map(function(m, i){
+      var incH = (m.income / scaleTop) * 100;
+      var expH = (m.expense / scaleTop) * 100;
+      var label = MONTH_ABBR[m.month] + ' ' + m.year;
+      var aria = label + ': income ' + fmt(m.income) + ', expenses ' + fmt(m.expense);
+      return '<button type="button" class="trend-col" data-idx="' + i + '" aria-label="' + escapeHtml(aria) + '">' +
+        '<div class="trend-bars">' +
+          '<div class="trend-bar income" style="height:' + incH + '%"></div>' +
+          '<div class="trend-bar expense" style="height:' + expH + '%"></div>' +
+        '</div>' +
+      '</button>';
+    }).join('');
+    var monthLabelsHtml = months.map(function(m){ return '<div class="trend-month-label">' + MONTH_ABBR[m.month] + '</div>'; }).join('');
+    return '<div class="section-head"><div class="section-title">6-Month Trend</div></div>' +
+      '<div class="card">' +
+        '<div class="trend-legend">' +
+          '<div class="trend-legend-item"><span class="spend-swatch" style="background:var(--teal-text)"></span>Income</div>' +
+          '<div class="trend-legend-item"><span class="spend-swatch" style="background:var(--brick)"></span>Expenses</div>' +
+        '</div>' +
+        '<div class="trend-plot">' + gridlinesHtml + '<div class="trend-cols">' + colsHtml + '</div></div>' +
+        '<div class="trend-months">' + monthLabelsHtml + '</div>' +
+      '</div>';
+  }
+
   function renderHome(){
     var container = document.getElementById('view-home');
     var balance = totalBalance();
@@ -636,6 +819,8 @@
       '<div class="stat-card"><div class="stat-label">Income · This Month</div><div class="stat-amt amt-pos">' + fmt(inc) + '</div></div>' +
       '<div class="stat-card"><div class="stat-label">Spent · This Month</div><div class="stat-amt amt-neg">' + fmt(exp) + '</div></div>' +
       '</div>' +
+      spendChartHtml() +
+      trendChartHtml() +
       '<div class="section-head"><div class="section-title">Budgets</div><a href="#" class="link" id="link-budgets">View all</a></div>' +
       budgetSnapshot +
       '<div class="section-head"><div class="section-title">Recent Activity</div><a href="#" class="link" id="link-history">View all</a></div>' +
@@ -1136,6 +1321,9 @@
       addContribution(goalCardEl.dataset.id, goalCardEl.querySelector('.contrib-input'));
       return;
     }
+
+    var trendCol = target.closest('.trend-col');
+    if(trendCol){ showToast(trendCol.getAttribute('aria-label')); return; }
 
     if(target.id === 'add-budget-btn'){ addBudget(); return; }
     if(target.id === 'add-goal-btn'){ addGoal(); return; }
