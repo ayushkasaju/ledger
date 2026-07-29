@@ -248,6 +248,7 @@
   /* goal card */
   .goal-head{display:flex; align-items:center; justify-content:space-between;}
   .goal-name{font-weight:600; font-size:14.5px;}
+  .goal-linked-note{font-size:11.5px; color:var(--ink-soft); margin-top:3px; line-height:1.4;}
   .goal-amounts{font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-soft); margin-top:2px;}
   .goal-pct{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); text-align:right; margin-top:4px;}
 
@@ -295,6 +296,8 @@
     font-size:11px; color:var(--ink-soft); font-weight:500;
   }
   .account-type-badge:hover{border-color:var(--ink-soft); color:var(--ink);}
+  .account-type-toggle{margin:8px 0 0; max-width:230px; padding:2px;}
+  .account-type-toggle .type-btn{padding:6px 4px; font-size:12px;}
   .account-balance{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:8px;}
   .account-starting{font-size:12px; color:var(--ink-soft); margin-top:6px; cursor:pointer;}
   .account-starting:hover{color:var(--ink);}
@@ -580,8 +583,9 @@
     <div class="sheet-title" id="accounts-sheet-title">Accounts</div>
     <div id="accounts-list" style="margin-bottom:14px;"></div>
     <div class="type-toggle" style="margin-bottom:10px;">
-      <button id="new-account-type-bank" class="type-btn active" type="button">Bank account</button>
+      <button id="new-account-type-bank" class="type-btn active" type="button">Bank</button>
       <button id="new-account-type-credit" class="type-btn" type="button">Credit card</button>
+      <button id="new-account-type-loan" class="type-btn" type="button">Loan</button>
     </div>
     <div class="form-row">
       <input id="new-account-name" type="text" placeholder="Account name" aria-label="Account name" maxlength="30">
@@ -653,7 +657,14 @@
     }
     return list;
   }
-  function accountTypeLabel(type){ return type === 'credit' ? 'Credit card' : 'Bank account'; }
+  function accountTypeLabel(type){
+    if(type === 'credit') return 'Credit card';
+    if(type === 'loan') return 'Loan';
+    return 'Bank account';
+  }
+  // Credit cards and loans are both liabilities: starting balance is entered
+  // and shown as a positive "amount owed," negated internally.
+  function isLiabilityType(type){ return type === 'credit' || type === 'loan'; }
   function normalizeCategories(obj){
     if(!obj || !Array.isArray(obj.expense) || !Array.isArray(obj.income)){
       return { expense: DEFAULT_EXPENSE_CATS.slice(), income: DEFAULT_INCOME_CATS.slice() };
@@ -792,6 +803,11 @@
   }
   function categorySpent(cat){
     return currentMonthTransactions().filter(function(t){ return t.type==='expense' && t.category===cat; }).reduce(function(s,t){ return s+t.amount; }, 0);
+  }
+  // All-time (not month-scoped) total for a category — used by goals linked to
+  // a category, since a savings goal accumulates across its whole lifetime.
+  function categoryTotalAllTime(cat){
+    return state.transactions.filter(function(t){ return t.type==='expense' && t.category===cat; }).reduce(function(s,t){ return s+t.amount; }, 0);
   }
 
   /* ---------- chart data ---------- */
@@ -937,21 +953,32 @@
   }
 
   function goalCard(g){
-    var pct = g.target > 0 ? Math.min(100, Math.round((g.current/g.target)*100)) : 0;
+    var isLinked = !!g.category;
+    var current = isLinked ? categoryTotalAllTime(g.category) : g.current;
+    var pct = g.target > 0 ? Math.min(100, Math.round((current/g.target)*100)) : 0;
+    var linkedNote = isLinked
+      ? '<div class="goal-linked-note">Tracking <strong>' + escapeHtml(g.category) + '</strong> spending — log a transaction in that category to add funds.</div>'
+      : '';
+    var contribRow = isLinked ? '' :
+      '<div class="form-row"><input class="contrib-input" type="number" inputmode="decimal" placeholder="Add amount" aria-label="Amount to add to ' + escapeHtml(g.name) + '" min="0" step="1">' +
+      '<button class="btn-tiny add-contrib" type="button">Add</button></div>';
     return '<div class="card goal-card" data-id="' + g.id + '">' +
       '<div class="goal-head"><div class="goal-name">' + escapeHtml(g.name) + '</div>' +
       '<button class="icon-btn del-goal" aria-label="Delete ' + escapeHtml(g.name) + ' goal">×</button></div>' +
-      '<div class="goal-amounts">' + fmt(g.current) + ' of ' + fmt(g.target) + '</div>' +
-      gaugeBar(g.current, g.target) +
+      linkedNote +
+      '<div class="goal-amounts">' + fmt(current) + ' of ' + fmt(g.target) + '</div>' +
+      gaugeBar(current, g.target) +
       '<div class="goal-pct">' + pct + '%</div>' +
-      '<div class="form-row"><input class="contrib-input" type="number" inputmode="decimal" placeholder="Add amount" aria-label="Amount to add to ' + escapeHtml(g.name) + '" min="0" step="1">' +
-      '<button class="btn-tiny add-contrib" type="button">Add</button></div></div>';
+      contribRow + '</div>';
   }
 
   function addGoalForm(){
+    var catOptions = '<option value="">No linked category — track manually</option>' +
+      state.categories.expense.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
     return '<div class="card add-form">' +
       '<div class="form-row"><input id="new-goal-name" type="text" placeholder="Goal name" aria-label="Goal name" maxlength="40"></div>' +
       '<div class="form-row"><input id="new-goal-target" type="number" inputmode="decimal" placeholder="Target amount" aria-label="Target amount" min="0" step="1"></div>' +
+      '<div class="form-row"><select id="new-goal-category" aria-label="Linked category, optional">' + catOptions + '</select></div>' +
       '<button id="add-goal-btn" class="btn-secondary" type="button">+ Add goal</button></div>';
   }
 
@@ -1022,7 +1049,7 @@
     if(state.accounts.length <= 1) return '';
     var rows = state.accounts.map(function(a){
       var bal = accountBalance(a.id);
-      var tag = a.type === 'credit' ? '<span class="acct-balance-tag">credit card</span>' : '';
+      var tag = isLiabilityType(a.type) ? '<span class="acct-balance-tag">' + accountTypeLabel(a.type).toLowerCase() + '</span>' : '';
       return '<div class="acct-balance-row"><span class="acct-balance-name">' + escapeHtml(a.name) + tag + '</span>' +
         '<span class="acct-balance-amt ' + (bal < 0 ? 'amt-neg' : 'amt-pos') + '">' + fmt(bal) + '</span></div>';
     }).join('');
@@ -1394,11 +1421,13 @@
   async function addGoal(){
     var nameInput = document.getElementById('new-goal-name');
     var targetInput = document.getElementById('new-goal-target');
+    var categorySelect = document.getElementById('new-goal-category');
     var name = nameInput.value.trim();
     var target = parseFloat(targetInput.value);
     if(!name){ flashError2(nameInput); return; }
     if(!target || target <= 0){ flashError2(targetInput); return; }
-    state.goals.push({ id: 'goal_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, target: target, current: 0 });
+    var category = categorySelect.value || null;
+    state.goals.push({ id: 'goal_' + Date.now() + '_' + Math.random().toString(36).slice(2,7), name: name, target: target, current: 0, category: category });
     try{ await saveGoals(); showToast('Goal added'); renderCurrentTab(); }
     catch(e){ showToast('Could not save'); }
   }
@@ -1734,21 +1763,43 @@
   function accountRow(a){
     var bal = accountBalance(a.id);
     var colorClass = bal < 0 ? 'amt-neg' : 'amt-pos';
-    var isCredit = a.type === 'credit';
-    var startingLabel = isCredit ? 'Amount owed' : 'Starting balance';
-    // A credit card's starting point is entered and shown as a positive "amount
+    var isLiability = isLiabilityType(a.type);
+    var startingLabel = isLiability ? 'Amount owed' : 'Starting balance';
+    // A liability's starting point is entered and shown as a positive "amount
     // owed" — never asking the user to type a negative number — and negated
     // internally so it still works as a normal (negative) contribution to net worth.
-    var startingDisplay = isCredit ? -(a.startingBalance || 0) : (a.startingBalance || 0);
+    var startingDisplay = isLiability ? -(a.startingBalance || 0) : (a.startingBalance || 0);
     return '<div class="card account-card" data-id="' + escapeHtml(a.id) + '">' +
       '<div class="account-row">' +
         '<div class="account-name-edit" role="button" tabindex="0" aria-label="Rename ' + escapeHtml(a.name) + ' account">' + escapeHtml(a.name) + '</div>' +
         '<button class="icon-btn del-account" aria-label="Delete ' + escapeHtml(a.name) + ' account">×</button>' +
       '</div>' +
-      '<button class="account-type-badge" type="button" data-id="' + escapeHtml(a.id) + '" aria-label="Account type: ' + accountTypeLabel(a.type) + '. Tap to change.">' + accountTypeLabel(a.type) + '</button>' +
+      '<div class="account-type-edit" data-id="' + escapeHtml(a.id) + '">' +
+        '<button class="account-type-badge" type="button" aria-label="Change account type, currently ' + accountTypeLabel(a.type) + '">' + accountTypeLabel(a.type) + '</button>' +
+      '</div>' +
       '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div>' +
       '<div class="account-starting" role="button" tabindex="0" aria-label="Edit ' + startingLabel.toLowerCase() + ' for ' + escapeHtml(a.name) + ', currently ' + fmt(startingDisplay) + '">' + startingLabel + ': <span class="mono">' + fmt(startingDisplay) + '</span></div>' +
       '</div>';
+  }
+  function editAccountType(container){
+    var id = container.dataset.id;
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    container.innerHTML =
+      '<div class="type-toggle account-type-toggle">' +
+        '<button class="type-btn' + (!isLiabilityType(acct.type) ? ' active' : '') + '" type="button" data-type="bank">Bank</button>' +
+        '<button class="type-btn' + (acct.type === 'credit' ? ' active' : '') + '" type="button" data-type="credit">Credit</button>' +
+        '<button class="type-btn' + (acct.type === 'loan' ? ' active' : '') + '" type="button" data-type="loan">Loan</button>' +
+      '</div>';
+  }
+  async function saveAccountType(id, type){
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    acct.type = type;
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast('Now a ' + accountTypeLabel(type).toLowerCase());
+      renderCurrentTab();
+    }catch(e){ showToast('Could not save'); }
   }
   function editAccountName(card){
     var id = card.dataset.id;
@@ -1777,9 +1828,9 @@
   function editAccountStarting(card){
     var id = card.dataset.id;
     var acct = state.accounts.find(function(a){ return a.id === id; });
-    var isCredit = acct.type === 'credit';
-    var label = isCredit ? 'Amount owed' : 'Starting balance';
-    var displayVal = isCredit ? -(acct.startingBalance || 0) : (acct.startingBalance || 0);
+    var isLiability = isLiabilityType(acct.type);
+    var label = isLiability ? 'Amount owed' : 'Starting balance';
+    var displayVal = isLiability ? -(acct.startingBalance || 0) : (acct.startingBalance || 0);
     var el = card.querySelector('.account-starting');
     el.removeAttribute('role');
     el.removeAttribute('tabindex');
@@ -1793,21 +1844,12 @@
     var val = parseFloat(input.value);
     if(isNaN(val)){ flashError2(input); return; }
     var acct = state.accounts.find(function(a){ return a.id === id; });
-    acct.startingBalance = acct.type === 'credit' ? -val : val;
+    var isLiability = isLiabilityType(acct.type);
+    acct.startingBalance = isLiability ? -val : val;
     try{
       await saveAccounts();
       renderAccountsList();
-      showToast((acct.type === 'credit' ? 'Amount owed' : 'Starting balance') + ' updated');
-      renderCurrentTab();
-    }catch(e){ showToast('Could not save'); }
-  }
-  async function toggleAccountType(id){
-    var acct = state.accounts.find(function(a){ return a.id === id; });
-    acct.type = acct.type === 'credit' ? 'bank' : 'credit';
-    try{
-      await saveAccounts();
-      renderAccountsList();
-      showToast('Now a ' + accountTypeLabel(acct.type).toLowerCase());
+      showToast((isLiability ? 'Amount owed' : 'Starting balance') + ' updated');
       renderCurrentTab();
     }catch(e){ showToast('Could not save'); }
   }
@@ -1817,6 +1859,7 @@
   function updateNewAccountTypeToggle(){
     document.getElementById('new-account-type-bank').classList.toggle('active', newAccountType === 'bank');
     document.getElementById('new-account-type-credit').classList.toggle('active', newAccountType === 'credit');
+    document.getElementById('new-account-type-loan').classList.toggle('active', newAccountType === 'loan');
   }
   function openAccountsSheet(){
     renderAccountsList();
@@ -1994,8 +2037,11 @@
     var startingEdit = e.target.closest('.account-starting');
     if(startingEdit && !startingEdit.querySelector('.inline-edit')){ editAccountStarting(startingEdit.closest('.account-card')); return; }
 
+    var typeToggleBtn = e.target.closest('.account-type-toggle .type-btn');
+    if(typeToggleBtn){ saveAccountType(typeToggleBtn.closest('.account-type-edit').dataset.id, typeToggleBtn.dataset.type); return; }
+
     var typeBadge = e.target.closest('.account-type-badge');
-    if(typeBadge){ toggleAccountType(typeBadge.dataset.id); return; }
+    if(typeBadge){ editAccountType(typeBadge.closest('.account-type-edit')); return; }
   });
   document.getElementById('accounts-sheet').addEventListener('keydown', function(e){
     if(e.key !== 'Enter' && e.key !== ' ') return;
@@ -2046,6 +2092,7 @@
   document.getElementById('add-account-btn').addEventListener('click', addAccount);
   document.getElementById('new-account-type-bank').addEventListener('click', function(){ newAccountType = 'bank'; updateNewAccountTypeToggle(); });
   document.getElementById('new-account-type-credit').addEventListener('click', function(){ newAccountType = 'credit'; updateNewAccountTypeToggle(); });
+  document.getElementById('new-account-type-loan').addEventListener('click', function(){ newAccountType = 'loan'; updateNewAccountTypeToggle(); });
 
   document.getElementById('categories-overlay').addEventListener('click', closeCategoriesSheet);
   document.getElementById('categories-close').addEventListener('click', closeCategoriesSheet);
