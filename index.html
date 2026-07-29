@@ -24,7 +24,10 @@
     --teal:#3F7D6B;
     --brick:#A8452F;
     --line:#D9DCC8;
+    --teal-text:#2C6353;
+    --focus:#1B3A2F;
     --shadow:0 1px 2px rgba(27,58,47,0.06), 0 4px 14px rgba(27,58,47,0.06);
+    --nav-h:64px;
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;background:var(--paper);}
@@ -37,13 +40,13 @@
   .mono{font-family:'IBM Plex Mono',monospace;}
   button{font-family:inherit;cursor:pointer;}
   input,select{font-family:inherit;}
-  a{color:var(--teal);}
+  a{color:var(--teal-text);}
 
   #phone{
     max-width:430px;
     margin:0 auto;
-    height:100dvh;
     height:100vh;
+    height:100dvh;
     display:flex;
     flex-direction:column;
     position:relative;
@@ -69,7 +72,7 @@
   }
   .header-row{display:flex; align-items:flex-start; justify-content:space-between;}
   .header-icon-btn{
-    width:36px; height:36px; flex-shrink:0; border-radius:9px;
+    width:44px; height:44px; flex-shrink:0; border-radius:9px;
     background:var(--card); border:1px solid var(--line); color:var(--ink-soft);
     display:flex; align-items:center; justify-content:center;
   }
@@ -93,9 +96,18 @@
   .preview-amt{flex-shrink:0; font-weight:600;}
   .import-more{padding:8px 0 2px; font-size:12px; color:var(--ink-soft); text-align:center;}
 
+  /* app shell — must itself be a flex column for header/main/nav to lay out
+     correctly and for #main's flex:1 (and the nav's pinned position) to take effect */
+  #app-content{
+    display:none;
+    flex-direction:column;
+    height:100%;
+    min-height:0;
+  }
+
   /* main scroll area */
   #main{
-    flex:1; overflow-y:auto;
+    flex:1; overflow-y:auto; min-height:0;
     padding:18px 18px 110px;
   }
   .view{display:none;}
@@ -130,7 +142,7 @@
   .stat-label{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:6px;}
   .stat-amt{font-family:'IBM Plex Mono',monospace; font-size:18px; font-weight:600;}
 
-  .amt-pos{color:var(--teal);}
+  .amt-pos{color:var(--teal-text);}
   .amt-neg{color:var(--brick);}
 
   .section-head{display:flex; align-items:baseline; justify-content:space-between; margin:22px 0 10px;}
@@ -168,7 +180,9 @@
 
   .icon-btn{
     background:none; border:none; color:var(--ink-soft); font-size:20px; line-height:1;
-    width:28px; height:28px; border-radius:50%; flex-shrink:0;
+    width:44px; height:44px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    margin:-8px; /* enlarges tap target without pushing surrounding layout */
   }
   .icon-btn:hover{background:var(--paper); color:var(--brick);}
 
@@ -239,27 +253,32 @@
   }
   .btn-text-danger:hover{color:var(--brick);}
 
-  /* FAB */
+  /* FAB — anchored to the nav bar's own height + safe area, not a fixed guess,
+     so it can never drift into overlapping the nav row on shorter/taller nav renders */
   #fab{
-    position:absolute; right:20px; bottom:88px; z-index:15;
+    position:absolute; right:20px; z-index:15;
+    bottom:calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px);
     width:56px; height:56px; border-radius:50%;
     background:var(--ink); color:var(--paper); border:none;
     font-size:28px; font-weight:400; line-height:1;
     box-shadow:0 6px 16px rgba(27,58,47,0.28);
     display:flex; align-items:center; justify-content:center;
   }
-  #fab:hover{background:var(--teal);}
+  #fab:hover{background:var(--teal-text);}
 
   /* bottom nav */
   .bottom-nav{
     position:sticky; bottom:0; z-index:10; flex-shrink:0;
     background:var(--card); border-top:1px solid var(--line);
     display:flex;
+    min-height:var(--nav-h);
+    padding-bottom:env(safe-area-inset-bottom);
   }
   .nav-btn{
     flex:1; background:none; border:none; padding:10px 4px 12px;
     display:flex; flex-direction:column; align-items:center; gap:4px;
     color:var(--ink-soft); font-size:10.5px; font-weight:500;
+    min-height:44px;
   }
   .nav-btn svg{width:20px; height:20px;}
   .nav-btn.active{color:var(--ink);}
@@ -321,7 +340,7 @@
     *{animation:none !important; transition:none !important;}
   }
 
-  :focus-visible{outline:2px solid var(--gold); outline-offset:2px;}
+  :focus-visible{outline:2px solid var(--focus); outline-offset:2px;}
 </style>
 </head>
 <body>
@@ -349,30 +368,30 @@
 
     <button id="fab" aria-label="Add transaction">+</button>
 
-    <nav class="bottom-nav">
-      <button class="nav-btn active" data-tab="home" aria-label="Home">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1v-9"/></svg>
+    <nav class="bottom-nav" aria-label="Main">
+      <button class="nav-btn active" data-tab="home" aria-current="page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9a1 1 0 0 0 1 1H10v-6h4v6h3.5a1 1 0 0 0 1-1v-9"/></svg>
         <span>Home</span>
       </button>
-      <button class="nav-btn" data-tab="budgets" aria-label="Budgets">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 3.2"/></svg>
+      <button class="nav-btn" data-tab="budgets">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5V12l6 3.2"/></svg>
         <span>Budgets</span>
       </button>
-      <button class="nav-btn" data-tab="goals" aria-label="Goals">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v18"/><path d="M6 4h11l-3 4 3 4H6"/></svg>
+      <button class="nav-btn" data-tab="goals">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3v18"/><path d="M6 4h11l-3 4 3 4H6"/></svg>
         <span>Goals</span>
       </button>
-      <button class="nav-btn" data-tab="history" aria-label="History">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.3 2"/></svg>
+      <button class="nav-btn" data-tab="history">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3.3 2"/></svg>
         <span>History</span>
       </button>
     </nav>
   </div>
 
   <div class="overlay" id="overlay"></div>
-  <div class="sheet" id="sheet">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Add Transaction</div>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="sheet-title">Add Transaction</div>
     <div class="type-toggle">
       <button id="type-expense" class="type-btn active" type="button">Expense</button>
       <button id="type-income" class="type-btn" type="button">Income</button>
@@ -400,9 +419,9 @@
   </div>
 
   <div class="overlay" id="import-overlay"></div>
-  <div class="sheet" id="import-sheet">
-    <div class="sheet-handle"></div>
-    <div class="sheet-title">Import from CSV</div>
+  <div class="sheet" id="import-sheet" role="dialog" aria-modal="true" aria-labelledby="import-sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="import-sheet-title">Import from CSV</div>
     <div id="import-body"></div>
     <div class="sheet-actions">
       <button id="import-cancel" class="btn-ghost" type="button">Cancel</button>
@@ -410,7 +429,7 @@
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </div>
 
 <script>
@@ -533,7 +552,7 @@
       categoryStamp(t.category) +
       '<div class="hist-info"><div class="hist-cat">' + escapeHtml(t.category) + '</div><div class="hist-meta">' + metaBits + '</div></div>' +
       '<div class="hist-amt ' + colorClass + '">' + sign + fmt(t.amount) + '</div>' +
-      '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete">×</button>' +
+      '<button class="icon-btn hist-del" data-id="' + t.id + '" aria-label="Delete ' + escapeHtml(t.category) + ' transaction of ' + fmt(t.amount) + ' on ' + formatDate(t.date) + '">×</button>' +
       '</div>';
   }
 
@@ -544,8 +563,8 @@
     return '<div class="card budget-card" data-cat="' + escapeHtml(cat) + '">' +
       '<div class="budget-head">' + categoryStamp(cat) +
       '<div class="budget-info"><div class="budget-cat">' + escapeHtml(cat) + '</div>' +
-      '<div class="budget-amounts">' + fmt(spent) + ' of ' + fmt(limit) + '</div></div>' +
-      '<button class="icon-btn del-budget" aria-label="Delete budget">×</button></div>' +
+      '<div class="budget-amounts" role="button" tabindex="0" aria-label="Edit ' + escapeHtml(cat) + ' budget limit, currently ' + fmt(spent) + ' of ' + fmt(limit) + '">' + fmt(spent) + ' of ' + fmt(limit) + '</div></div>' +
+      '<button class="icon-btn del-budget" aria-label="Delete ' + escapeHtml(cat) + ' budget">×</button></div>' +
       gaugeBar(spent, limit) +
       '<div class="budget-pct">' + pct + '%</div></div>';
   }
@@ -555,8 +574,8 @@
     if(available.length === 0) return '';
     var opts = available.map(function(c){ return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + '</option>'; }).join('');
     return '<div class="card add-form">' +
-      '<div class="form-row"><select id="new-budget-cat">' + opts + '</select></div>' +
-      '<div class="form-row"><input id="new-budget-limit" type="number" inputmode="decimal" placeholder="Monthly limit" min="0" step="1"></div>' +
+      '<div class="form-row"><select id="new-budget-cat" aria-label="Category">' + opts + '</select></div>' +
+      '<div class="form-row"><input id="new-budget-limit" type="number" inputmode="decimal" placeholder="Monthly limit" aria-label="Monthly limit" min="0" step="1"></div>' +
       '<button id="add-budget-btn" class="btn-secondary" type="button">+ Add budget</button></div>';
   }
 
@@ -564,18 +583,18 @@
     var pct = g.target > 0 ? Math.min(100, Math.round((g.current/g.target)*100)) : 0;
     return '<div class="card goal-card" data-id="' + g.id + '">' +
       '<div class="goal-head"><div class="goal-name">' + escapeHtml(g.name) + '</div>' +
-      '<button class="icon-btn del-goal" aria-label="Delete goal">×</button></div>' +
+      '<button class="icon-btn del-goal" aria-label="Delete ' + escapeHtml(g.name) + ' goal">×</button></div>' +
       '<div class="goal-amounts">' + fmt(g.current) + ' of ' + fmt(g.target) + '</div>' +
       gaugeBar(g.current, g.target) +
       '<div class="goal-pct">' + pct + '%</div>' +
-      '<div class="form-row"><input class="contrib-input" type="number" inputmode="decimal" placeholder="Add amount" min="0" step="1">' +
+      '<div class="form-row"><input class="contrib-input" type="number" inputmode="decimal" placeholder="Add amount" aria-label="Amount to add to ' + escapeHtml(g.name) + '" min="0" step="1">' +
       '<button class="btn-tiny add-contrib" type="button">Add</button></div></div>';
   }
 
   function addGoalForm(){
     return '<div class="card add-form">' +
-      '<div class="form-row"><input id="new-goal-name" type="text" placeholder="Goal name" maxlength="40"></div>' +
-      '<div class="form-row"><input id="new-goal-target" type="number" inputmode="decimal" placeholder="Target amount" min="0" step="1"></div>' +
+      '<div class="form-row"><input id="new-goal-name" type="text" placeholder="Goal name" aria-label="Goal name" maxlength="40"></div>' +
+      '<div class="form-row"><input id="new-goal-target" type="number" inputmode="decimal" placeholder="Target amount" aria-label="Target amount" min="0" step="1"></div>' +
       '<button id="add-goal-btn" class="btn-secondary" type="button">+ Add goal</button></div>';
   }
 
@@ -645,10 +664,55 @@
     activeTab = tab;
     document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
     document.getElementById('view-' + tab).classList.add('active');
-    document.querySelectorAll('.nav-btn').forEach(function(b){ b.classList.toggle('active', b.dataset.tab === tab); });
+    document.querySelectorAll('.nav-btn').forEach(function(b){
+      var isActive = b.dataset.tab === tab;
+      b.classList.toggle('active', isActive);
+      if(isActive) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
     renderCurrentTab();
     document.getElementById('main').scrollTop = 0;
   }
+
+  /* ---------- focus management for modal sheets ---------- */
+  var lastFocusedEl = null;
+  function getFocusable(container){
+    var sel = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return Array.prototype.slice.call(container.querySelectorAll(sel)).filter(function(el){ return el.offsetParent !== null; });
+  }
+  function openSheetEl(sheetEl, overlayEl, focusEl){
+    lastFocusedEl = document.activeElement;
+    sheetEl.removeAttribute('inert');
+    overlayEl.classList.add('show');
+    sheetEl.classList.add('show');
+    // preventScroll: the sheet is still mid-transition (off-screen) at this point;
+    // without this, focus() drags the whole #phone viewport via its ancestor's
+    // overflow:hidden scroll-into-view behavior and never resets it.
+    (focusEl || sheetEl).focus({ preventScroll: true });
+    document.getElementById('phone').scrollTop = 0;
+  }
+  function closeSheetEl(sheetEl, overlayEl){
+    overlayEl.classList.remove('show');
+    sheetEl.classList.remove('show');
+    sheetEl.setAttribute('inert', '');
+    if(lastFocusedEl){ lastFocusedEl.focus({ preventScroll: true }); lastFocusedEl = null; }
+    document.getElementById('phone').scrollTop = 0;
+  }
+  document.addEventListener('keydown', function(e){
+    var openSheetElm = document.querySelector('.sheet.show');
+    if(!openSheetElm) return;
+    if(e.key === 'Escape'){
+      if(openSheetElm.id === 'sheet') closeAddSheet();
+      else if(openSheetElm.id === 'import-sheet') closeImportSheet();
+      return;
+    }
+    if(e.key === 'Tab'){
+      var focusable = getFocusable(openSheetElm);
+      if(focusable.length === 0) return;
+      var first = focusable[0], last = focusable[focusable.length - 1];
+      if(e.shiftKey && document.activeElement === first){ e.preventDefault(); last.focus(); }
+      else if(!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
+    }
+  });
 
   /* ---------- add transaction sheet ---------- */
   function populateCategorySelect(){
@@ -672,12 +736,10 @@
     document.getElementById('tx-date').value = todayISO();
     updateTypeToggle();
     populateCategorySelect();
-    document.getElementById('overlay').classList.add('show');
-    document.getElementById('sheet').classList.add('show');
+    openSheetEl(document.getElementById('sheet'), document.getElementById('overlay'), document.getElementById('tx-amount'));
   }
   function closeAddSheet(){
-    document.getElementById('overlay').classList.remove('show');
-    document.getElementById('sheet').classList.remove('show');
+    closeSheetEl(document.getElementById('sheet'), document.getElementById('overlay'));
   }
   async function saveTransaction(){
     var amountEl = document.getElementById('tx-amount');
@@ -750,7 +812,11 @@
     var cat = card.dataset.cat;
     var limit = state.budgets[cat];
     var el = card.querySelector('.budget-amounts');
-    el.innerHTML = '<input class="inline-edit" type="number" value="' + limit + '" min="0" step="1"> <button class="btn-tiny save-limit" type="button">Save</button>';
+    el.removeAttribute('role');
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
+    el.innerHTML = '<input class="inline-edit" type="number" value="' + limit + '" min="0" step="1" aria-label="New monthly limit for ' + escapeHtml(cat) + '"> <button class="btn-tiny save-limit" type="button">Save</button>';
+    el.querySelector('.inline-edit').focus();
   }
   async function saveNewLimit(card){
     var cat = card.dataset.cat;
@@ -870,25 +936,23 @@
   function resetImportBody(){
     document.getElementById('import-body').innerHTML =
       '<p class="import-help">Export your transactions from your bank as a CSV file, then choose it below. Dates, amounts, and descriptions are picked up automatically — everything imports under the "Other" category so you can re-sort it after.</p>' +
-      '<input type="file" id="csv-file-input" accept=".csv,text/csv" class="file-input">';
+      '<input type="file" id="csv-file-input" accept=".csv,text/csv" class="file-input" aria-label="Choose CSV file">';
     document.getElementById('csv-file-input').addEventListener('change', handleCsvFile);
   }
   function openImportSheet(){
     pendingImport = [];
     resetImportBody();
     document.getElementById('import-confirm').disabled = true;
-    document.getElementById('import-overlay').classList.add('show');
-    document.getElementById('import-sheet').classList.add('show');
+    openSheetEl(document.getElementById('import-sheet'), document.getElementById('import-overlay'), document.getElementById('csv-file-input'));
   }
   function closeImportSheet(){
-    document.getElementById('import-overlay').classList.remove('show');
-    document.getElementById('import-sheet').classList.remove('show');
+    closeSheetEl(document.getElementById('import-sheet'), document.getElementById('import-overlay'));
     pendingImport = [];
   }
   function showImportError(msg){
     document.getElementById('import-body').innerHTML =
       '<p class="import-help import-error">' + escapeHtml(msg) + '</p>' +
-      '<input type="file" id="csv-file-input" accept=".csv,text/csv" class="file-input">';
+      '<input type="file" id="csv-file-input" accept=".csv,text/csv" class="file-input" aria-label="Choose CSV file">';
     document.getElementById('csv-file-input').addEventListener('change', handleCsvFile);
     document.getElementById('import-confirm').disabled = true;
   }
@@ -971,6 +1035,12 @@
     if(target.id === 'link-history'){ e.preventDefault(); switchTab('history'); return; }
   });
 
+  document.getElementById('app-content').addEventListener('keydown', function(e){
+    if(e.key !== 'Enter' && e.key !== ' ') return;
+    var budgetAmounts = e.target.closest('.budget-amounts[role="button"]');
+    if(budgetAmounts){ e.preventDefault(); editBudgetLimit(budgetAmounts.closest('.budget-card')); }
+  });
+
   document.querySelectorAll('.nav-btn').forEach(function(btn){
     btn.addEventListener('click', function(){ switchTab(btn.dataset.tab); });
   });
@@ -991,7 +1061,7 @@
     document.getElementById('month-label').textContent = monthLabel();
     await loadState();
     document.getElementById('loading').style.display = 'none';
-    document.getElementById('app-content').style.display = 'block';
+    document.getElementById('app-content').style.display = 'flex';
     switchTab('home');
   }
   init();
