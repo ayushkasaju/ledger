@@ -395,6 +395,10 @@
   .account-apr:hover{color:var(--ink);}
   .account-apr .inline-edit{width:80px;}
   .account-apr-unset{font-style:italic; opacity:0.75;}
+  .apr-edit-row{display:flex; align-items:center; gap:7px; margin-bottom:7px; flex-wrap:wrap;}
+  .apr-edit-row .inline-edit{width:74px;}
+  .apr-edit-unit{font-size:12px; color:var(--ink-soft);}
+  .apr-edit-hint{font-size:11.5px; color:var(--ink-soft); line-height:1.45; margin:2px 0 9px; opacity:0.9;}
 
   /* account balance breakdown (home) */
   .acct-balances{margin-bottom:16px;}
@@ -831,6 +835,26 @@
     }catch(e){ state.recurring = []; }
 
     if(migrateTransactionAccounts(state.transactions, state.accounts)) await saveTransactions();
+
+    // Backfill schedule anchors for records created before day-anchoring existed,
+    // derived from their current next date so existing schedules don't shift.
+    var anchoredRecurring = false;
+    state.recurring.forEach(function(r){
+      if(r.frequency === 'monthly' && !r.anchorDay && r.nextDate){
+        r.anchorDay = new Date(r.nextDate + 'T00:00:00').getDate();
+        anchoredRecurring = true;
+      }
+    });
+    if(anchoredRecurring) await saveRecurring();
+
+    var anchoredAccounts = false;
+    state.accounts.forEach(function(a){
+      if(a.apr > 0 && !a.interestDay && a.nextInterestDate){
+        a.interestDay = new Date(a.nextInterestDate + 'T00:00:00').getDate();
+        anchoredAccounts = true;
+      }
+    });
+    if(anchoredAccounts) await saveAccounts();
   }
   async function saveTransactions(){ localStorage.setItem('ledger:transactions', JSON.stringify(state.transactions)); }
   async function saveBudgets(){ localStorage.setItem('ledger:budgets', JSON.stringify(state.budgets)); }
@@ -939,6 +963,20 @@
     var now = new Date();
     var daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     return { day: now.getDate(), daysInMonth: daysInMonth, fraction: now.getDate() / daysInMonth };
+  }
+  // How far past the straight-line pace counts as "ahead", in percentage points.
+  // Generous early and tightening later, because real spending is lumpy — rent
+  // and a grocery run both land in the first few days, which would otherwise
+  // flag almost every budget as alarming on the 2nd of the month.
+  function paceTolerancePct(fraction){
+    return Math.max(10, 35 * (1 - fraction));
+  }
+  // Single source of truth for the pace judgement — the gauge colour and the
+  // status line previously used slightly different thresholds and could disagree.
+  function isAheadOfPace(spent, limit, fraction){
+    if(!limit || limit <= 0) return false;
+    var pct = (spent / limit) * 100;
+    return pct > (fraction * 100) + paceTolerancePct(fraction);
   }
   // Expense spending this month in categories that have no budget set — a
   // blind spot otherwise, since the Budgets tab only lists budgeted categories.
@@ -1150,9 +1188,7 @@
     if(over){
       colorClass = 'over';
     } else if(typeof paceFraction === 'number'){
-      // 10-point tolerance so early-month noise (day 2, one purchase) doesn't
-      // read as alarming before the trend means anything.
-      colorClass = rawPct > (paceFraction * 100) + 10 ? 'warn' : 'ok';
+      colorClass = isAheadOfPace(spent, safeLimit, paceFraction) ? 'warn' : 'ok';
     } else {
       colorClass = rawPct > 80 ? 'warn' : 'ok';
     }
@@ -1235,12 +1271,11 @@
 
     var statusHtml = '';
     if(showPacing){
-      var expectedByNow = limit * pace.fraction;
       var statusText, statusClass;
       if(spent > limit){
         statusText = fmt(spent - limit) + ' over budget';
         statusClass = 'budget-status over';
-      } else if(spent > expectedByNow * 1.1){
+      } else if(isAheadOfPace(spent, limit, pace.fraction)){
         statusText = fmt(remaining) + ' left · ahead of pace';
         statusClass = 'budget-status warn';
       } else {
@@ -1945,13 +1980,33 @@
     document.getElementById('tx-category').value = name;
     showToast('Category added');
   }
-  function nextRecurDate(dateStr, frequency){
-    var d = new Date(dateStr + 'T00:00:00');
-    if(frequency === 'weekly'){ d.setDate(d.getDate() + 7); }
-    else{ d.setMonth(d.getMonth() + 1); }
+  function toLocalISO(d){
     var off = d.getTimezoneOffset();
-    var local = new Date(d.getTime() - off*60000);
-    return local.toISOString().slice(0,10);
+    return new Date(d.getTime() - off*60000).toISOString().slice(0,10);
+  }
+  // The next date strictly after afterDateStr that falls on `day` of the month,
+  // clamped to the month's length. Anchoring to a fixed day (rather than
+  // repeatedly adding a month) is what stops a 31st schedule from drifting:
+  // plain setMonth turns Jan 31 into Mar 3, and it never recovers.
+  function nextDateOnDay(afterDateStr, day){
+    var after = new Date(afterDateStr + 'T00:00:00');
+    for(var i=0;i<=2;i++){
+      var y = after.getFullYear(), m = after.getMonth() + i;
+      var lastDay = new Date(y, m + 1, 0).getDate();
+      var candidate = new Date(y, m, Math.min(day, lastDay));
+      if(candidate > after) return toLocalISO(candidate);
+    }
+    return toLocalISO(after);
+  }
+  // anchorDay (optional) keeps monthly schedules pinned to their intended day.
+  function nextRecurDate(dateStr, frequency, anchorDay){
+    if(frequency === 'weekly'){
+      var w = new Date(dateStr + 'T00:00:00');
+      w.setDate(w.getDate() + 7);
+      return toLocalISO(w);
+    }
+    var day = anchorDay || new Date(dateStr + 'T00:00:00').getDate();
+    return nextDateOnDay(dateStr, day);
   }
   // An adjustment stores a signed delta, not the value the user typed. Given
   // the account's balance *excluding* this record's own prior contribution
@@ -2044,7 +2099,8 @@
         state.recurring.push({
           id: 'rec_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
           type: txType, amount: amountVal, category: category, accountId: accountId, note: note,
-          frequency: repeat, nextDate: nextRecurDate(date, repeat)
+          frequency: repeat, anchorDay: new Date(date + 'T00:00:00').getDate(),
+          nextDate: nextRecurDate(date, repeat, new Date(date + 'T00:00:00').getDate())
         });
         await saveRecurring();
       }
@@ -2470,12 +2526,18 @@
       (isLiability ? accountAprHtml(a) : '') +
       '</div>';
   }
+  function ordinalDay(d){
+    if(d % 10 === 1 && d !== 11) return d + 'st';
+    if(d % 10 === 2 && d !== 12) return d + 'nd';
+    if(d % 10 === 3 && d !== 13) return d + 'rd';
+    return d + 'th';
+  }
   function accountAprHtml(a){
     var hasApr = a.apr && a.apr > 0;
     var label = hasApr
-      ? 'Interest: <span class="mono">' + a.apr + '% APR</span>'
+      ? 'Interest: <span class="mono">' + a.apr + '% APR</span> on the ' + ordinalDay(a.interestDay || 1)
       : 'Interest: <span class="account-apr-unset">not set</span>';
-    return '<div class="account-apr" role="button" tabindex="0" aria-label="Edit interest rate for ' + escapeHtml(a.name) + ', currently ' + (hasApr ? a.apr + ' percent APR' : 'not set') + '">' + label + '</div>';
+    return '<div class="account-apr" role="button" tabindex="0" aria-label="Edit interest settings for ' + escapeHtml(a.name) + ', currently ' + (hasApr ? a.apr + ' percent APR charged on day ' + (a.interestDay || 1) : 'not set') + '">' + label + '</div>';
   }
   function editAccountApr(card){
     var id = card.dataset.id;
@@ -2484,30 +2546,37 @@
     el.removeAttribute('role');
     el.removeAttribute('tabindex');
     el.removeAttribute('aria-label');
-    el.innerHTML = 'Interest: <input class="inline-edit" type="number" inputmode="decimal" value="' + (acct.apr || '') + '" min="0" step="0.01" placeholder="0.00" aria-label="Annual interest rate for ' + escapeHtml(acct.name) + '"> % APR <button class="btn-tiny save-account-apr" type="button">Save</button>';
-    el.querySelector('.inline-edit').focus();
+    el.innerHTML =
+      '<div class="apr-edit-row"><input class="inline-edit apr-rate" type="number" inputmode="decimal" value="' + (acct.apr || '') + '" min="0" step="0.01" placeholder="0.00" aria-label="Annual interest rate for ' + escapeHtml(acct.name) + '"><span class="apr-edit-unit">% APR</span></div>' +
+      '<div class="apr-edit-row"><span class="apr-edit-unit">charged on day</span><input class="inline-edit apr-day" type="number" inputmode="numeric" value="' + (acct.interestDay || new Date().getDate()) + '" min="1" max="31" step="1" aria-label="Day of month interest is charged"><span class="apr-edit-unit">of the month</span></div>' +
+      '<div class="apr-edit-hint">Match this to your statement closing date. Months without that day use the last day instead.</div>' +
+      '<button class="btn-tiny save-account-apr" type="button">Save</button>';
+    el.querySelector('.apr-rate').focus();
   }
   async function saveAccountApr(card){
     var id = card.dataset.id;
-    var input = card.querySelector('.account-apr .inline-edit');
-    var raw = input.value.trim();
+    var rateInput = card.querySelector('.account-apr .apr-rate');
+    var dayInput = card.querySelector('.account-apr .apr-day');
+    var raw = rateInput.value.trim();
     var acct = state.accounts.find(function(a){ return a.id === id; });
-    if(raw === ''){
-      delete acct.apr;
-      delete acct.nextInterestDate;
+
+    if(raw === '' || parseFloat(raw) === 0){
+      delete acct.apr; delete acct.nextInterestDate; delete acct.interestDay;
     } else {
       var val = parseFloat(raw);
-      if(isNaN(val) || val < 0){ flashError2(input); return; }
+      if(isNaN(val) || val < 0){ flashError2(rateInput); return; }
+      var day = parseInt(dayInput.value, 10);
+      if(isNaN(day) || day < 1 || day > 31){ flashError2(dayInput); return; }
       acct.apr = val;
-      // Start accruing a month from now rather than back-charging history the
-      // user never modelled — predictable, and never silently invents debt.
-      if(val > 0 && !acct.nextInterestDate) acct.nextInterestDate = nextRecurDate(todayISO(), 'monthly');
-      if(val === 0){ delete acct.apr; delete acct.nextInterestDate; }
+      acct.interestDay = day;
+      // Always re-anchor to the next occurrence of the chosen day. Strictly in
+      // the future, so changing the setting never back-charges history.
+      acct.nextInterestDate = nextDateOnDay(todayISO(), day);
     }
     try{
       await saveAccounts();
       renderAccountsList();
-      showToast(acct.apr ? 'Interest rate set' : 'Interest rate cleared');
+      showToast(acct.apr ? 'Interest set — next charge ' + formatDate(acct.nextInterestDate) : 'Interest cleared');
       renderCurrentTab();
     }catch(e){ showToast('Could not save'); }
   }
@@ -2750,7 +2819,7 @@
           type: rule.type, amount: rule.amount, category: rule.category, accountId: rule.accountId,
           note: rule.note, date: rule.nextDate
         });
-        rule.nextDate = nextRecurDate(rule.nextDate, rule.frequency);
+        rule.nextDate = nextRecurDate(rule.nextDate, rule.frequency, rule.anchorDay);
         generated++;
         iterations++;
       }
@@ -2792,7 +2861,7 @@
             generated++;
           }
         }
-        a.nextInterestDate = nextRecurDate(a.nextInterestDate, 'monthly');
+        a.nextInterestDate = nextRecurDate(a.nextInterestDate, 'monthly', a.interestDay);
         iterations++;
       }
     });
