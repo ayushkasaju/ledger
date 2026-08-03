@@ -208,6 +208,47 @@
   .budget-unbudgeted-amt{font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:600; color:var(--ink-soft);}
   .budget-unbudgeted-label{font-size:12px; color:var(--ink-soft); margin-top:3px; line-height:1.45;}
 
+  /* insights */
+  .insights-card{padding:4px 14px;}
+  .insight-row{
+    display:flex; align-items:flex-start; gap:10px; padding:11px 0;
+    border-bottom:1px solid var(--line); font-size:13px; line-height:1.5;
+    color:var(--ink); text-align:left; width:100%;
+  }
+  .insight-row:last-child{border-bottom:none;}
+  .insight-icon{
+    flex-shrink:0; width:20px; text-align:center; font-size:12px;
+    color:var(--ink-soft); line-height:1.6;
+  }
+  .insight-row.pos .insight-icon{color:var(--teal-text);}
+  .insight-row.neg .insight-icon{color:var(--brick);}
+  .insight-row.warn .insight-icon{color:var(--gold);}
+  .insight-text{flex:1; min-width:0;}
+  button.insight-row{background:none; border:none; border-bottom:1px solid var(--line); font-family:inherit;}
+  button.insight-row:last-child{border-bottom:none;}
+  button.insight-row:hover .insight-cta{text-decoration:underline;}
+  .insight-cta{color:var(--teal-text); font-weight:600; white-space:nowrap;}
+
+  /* payoff calculator */
+  .payoff-facts{
+    display:flex; gap:10px; margin-bottom:14px;
+  }
+  .payoff-facts > div{
+    flex:1; background:var(--card); border:1px solid var(--line);
+    border-radius:10px; padding:10px 12px;
+  }
+  .payoff-label{display:block; font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.05em;}
+  .payoff-value{display:block; font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:3px;}
+  .payoff-headline{font-family:'Fraunces',serif; font-size:30px; font-weight:600; color:var(--ink); margin-top:4px;}
+  .payoff-sub{font-family:'IBM Plex Mono',monospace; font-size:12.5px; color:var(--ink-soft); margin-top:4px;}
+  .payoff-note{
+    font-size:12.5px; line-height:1.55; color:var(--ink-soft);
+    margin-top:12px; padding:10px 12px; background:var(--card);
+    border:1px solid var(--line); border-radius:10px;
+  }
+  .payoff-note.neg{color:var(--brick); border-color:rgba(168,69,47,0.3);}
+  .payoff-note.pos{color:var(--teal-text);}
+
   .icon-btn{
     background:none; border:none; color:var(--ink-soft); font-size:20px; line-height:1;
     width:44px; height:44px; border-radius:50%; flex-shrink:0;
@@ -672,6 +713,25 @@
     </div>
   </div>
 
+  <div class="overlay" id="payoff-overlay"></div>
+  <div class="sheet" id="payoff-sheet" role="dialog" aria-modal="true" aria-labelledby="payoff-sheet-title" tabindex="-1" inert>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-title" id="payoff-sheet-title">Payoff Calculator</div>
+    <p class="import-help">Try a monthly payment and see what it costs you in time and interest. Nothing here is saved — it's just math.</p>
+    <div class="form-group">
+      <label for="payoff-account">Account</label>
+      <select id="payoff-account"></select>
+    </div>
+    <div class="form-group">
+      <label for="payoff-payment">Monthly payment</label>
+      <input id="payoff-payment" type="number" inputmode="decimal" min="0" step="10" placeholder="0.00">
+    </div>
+    <div id="payoff-result" aria-live="polite"></div>
+    <div class="sheet-actions">
+      <button id="payoff-close" class="btn-ghost" type="button" style="flex:1;">Close</button>
+    </div>
+  </div>
+
   <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </div>
 
@@ -892,6 +952,92 @@
       cats[t.category] = (cats[t.category] || 0) + t.amount;
     });
     return { total: total, categoryCount: Object.keys(cats).length };
+  }
+
+  /* ---------- insights (descriptive only — facts computed from your own data,
+     never a recommendation about what to do with your money) ---------- */
+
+  function categorySpentInMonth(cat, year, month){
+    return state.transactions.reduce(function(s,t){
+      if(t.type !== 'expense' || t.category !== cat) return s;
+      var d = new Date(t.date + 'T00:00:00');
+      if(d.getFullYear() !== year || d.getMonth() !== month) return s;
+      return s + t.amount;
+    }, 0);
+  }
+  // Average monthly spend for a category over the N months *before* this one.
+  // Returns null when there's no prior activity, so callers can stay silent
+  // rather than compare against a meaningless zero.
+  function categoryPriorAverage(cat, monthsBack){
+    var now = new Date();
+    var total = 0, monthsWithData = 0;
+    for(var i=1;i<=monthsBack;i++){
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      var amt = categorySpentInMonth(cat, d.getFullYear(), d.getMonth());
+      if(amt > 0) monthsWithData++;
+      total += amt;
+    }
+    if(monthsWithData === 0) return null;
+    return total / monthsBack;
+  }
+  // How many of the last N completed months went over this budget.
+  function budgetOverrunCount(cat, monthsBack){
+    var limit = state.budgets[cat];
+    if(!limit || limit <= 0) return 0;
+    var now = new Date();
+    var count = 0;
+    for(var i=1;i<=monthsBack;i++){
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      if(categorySpentInMonth(cat, d.getFullYear(), d.getMonth()) > limit) count++;
+    }
+    return count;
+  }
+  function totalInterestPaid(){
+    return state.transactions.reduce(function(s,t){
+      return (t.type === 'expense' && t.category === INTEREST_CATEGORY) ? s + t.amount : s;
+    }, 0);
+  }
+  // What each debt currently costs per month just to carry, at its own APR.
+  function debtCarryCosts(){
+    return state.accounts.filter(function(a){
+      return isLiabilityType(a.type) && a.apr > 0 && accountBalance(a.id) < 0;
+    }).map(function(a){
+      var owed = -accountBalance(a.id);
+      return { id: a.id, name: a.name, apr: a.apr, owed: owed, monthlyCost: owed * ((a.apr/100)/12) };
+    }).sort(function(x,y){ return y.monthlyCost - x.monthlyCost; });
+  }
+  function biggestExpenseThisMonth(){
+    var biggest = null;
+    currentMonthTransactions().forEach(function(t){
+      if(t.type !== 'expense') return;
+      if(!biggest || t.amount > biggest.amount) biggest = t;
+    });
+    return biggest;
+  }
+
+  // Amortisation: how long a balance takes to clear at a fixed monthly payment,
+  // and what it costs in interest along the way. Returns neverClears when the
+  // payment doesn't even cover the monthly interest — the case worth warning about.
+  function computePayoff(owed, apr, payment){
+    if(owed <= 0) return { months: 0, totalInterest: 0, neverClears: false };
+    var rate = (apr > 0 ? apr : 0) / 100 / 12;
+    var firstMonthInterest = owed * rate;
+    if(payment <= firstMonthInterest) return { months: null, totalInterest: null, neverClears: true, firstMonthInterest: firstMonthInterest };
+    var balance = owed, months = 0, totalInterest = 0, cap = 600;
+    while(balance > 0 && months < cap){
+      var interest = balance * rate;
+      totalInterest += interest;
+      balance = balance + interest - payment;
+      months++;
+      if(balance < 0.005) balance = 0;
+    }
+    return { months: months, totalInterest: totalInterest, neverClears: false };
+  }
+  function monthsOutLabel(months){
+    var d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() + months);
+    return MONTH_ABBR[d.getMonth()] + ' ' + d.getFullYear();
   }
   // All-time (not month-scoped) total for a category — used by goals linked to
   // a category, since a savings goal accumulates across its whole lifetime.
@@ -1312,6 +1458,84 @@
     return '<div class="card acct-balances">' + rows + '</div>';
   }
 
+  function insightRow(icon, text, cls){
+    return '<div class="insight-row ' + (cls || '') + '">' +
+      '<span class="insight-icon" aria-hidden="true">' + icon + '</span>' +
+      '<span class="insight-text">' + text + '</span></div>';
+  }
+
+  // Only surfaces things there's enough history to state confidently — an
+  // empty Insights card is better than one inventing signal from one week.
+  function insightsHtml(){
+    var rows = [];
+
+    // Cash flow this month. Requires income to actually be logged — otherwise
+    // "you spent more than you earned" just means you haven't entered a
+    // paycheck yet, which is noise rather than signal.
+    var inc = monthIncome(), exp = monthExpenses();
+    if(inc > 0){
+      var net = inc - exp;
+      if(net < 0){
+        rows.push(insightRow('&#9660;', 'You\'ve spent <strong>' + fmt(-net) + ' more than you earned</strong> this month.', 'neg'));
+      } else {
+        rows.push(insightRow('&#9650;', 'You\'re <strong>' + fmt(net) + ' ahead</strong> on the month so far.', 'pos'));
+      }
+    }
+
+    // Categories running hot vs their own recent average
+    var trendingUp = [];
+    state.categories.expense.forEach(function(cat){
+      var thisMonth = categorySpent(cat);
+      if(thisMonth <= 0) return;
+      var avg = categoryPriorAverage(cat, 3);
+      if(avg === null || avg <= 0) return;
+      if(thisMonth > avg * 1.25){
+        trendingUp.push({ cat: cat, pct: Math.round(((thisMonth - avg)/avg) * 100), thisMonth: thisMonth, avg: avg });
+      }
+    });
+    trendingUp.sort(function(a,b){ return b.pct - a.pct; }).slice(0,2).forEach(function(t){
+      rows.push(insightRow('&#8599;', '<strong>' + escapeHtml(t.cat) + '</strong> is up ' + t.pct + '% this month — ' +
+        fmt(t.thisMonth) + ' vs ' + fmt(t.avg) + ' average.', 'warn'));
+    });
+
+    // Budgets you've blown repeatedly — the pattern, not the one-off
+    Object.keys(state.budgets).forEach(function(cat){
+      var overruns = budgetOverrunCount(cat, 3);
+      if(overruns >= 2){
+        rows.push(insightRow('&#9888;', 'Over your <strong>' + escapeHtml(cat) + '</strong> budget in ' + overruns + ' of the last 3 months.', 'warn'));
+      }
+    });
+
+    // What carrying each debt costs per month
+    var carry = debtCarryCosts();
+    carry.slice(0,3).forEach(function(d){
+      rows.push('<button type="button" class="insight-row link-row payoff-open" data-id="' + escapeHtml(d.id) + '" ' +
+        'aria-label="Open payoff calculator for ' + escapeHtml(d.name) + '">' +
+        '<span class="insight-icon" aria-hidden="true">&#37;</span>' +
+        '<span class="insight-text"><strong>' + escapeHtml(d.name) + '</strong> at ' + d.apr + '% costs about <strong>' +
+        fmt(d.monthlyCost) + '/mo</strong> in interest. <span class="insight-cta">Run the numbers &#8250;</span></span></button>');
+    });
+
+    // Interest actually paid — usually the number that lands hardest
+    var paidInterest = totalInterestPaid();
+    if(paidInterest > 0){
+      rows.push(insightRow('&#8721;', 'You\'ve paid <strong>' + fmt(paidInterest) + '</strong> in interest so far.', ''));
+    }
+
+    // Biggest single expense this month — only worth saying once there are
+    // enough transactions for "largest" to be a real comparison.
+    var expenseCount = currentMonthTransactions().filter(function(t){ return t.type === 'expense'; }).length;
+    var big = expenseCount >= 3 ? biggestExpenseThisMonth() : null;
+    if(big && exp > 0 && big.amount >= exp * 0.25){
+      rows.push(insightRow('&#9679;', 'Largest expense this month: <strong>' + fmt(big.amount) + '</strong> on ' +
+        escapeHtml(big.category) + (big.note ? ' (' + escapeHtml(big.note) + ')' : '') + '.', ''));
+    }
+
+    if(rows.length === 0) return '';
+    return '<div class="section-head"><div class="section-title">Insights</div></div>' +
+      '<div class="card insights-card">' + rows.join('') + '</div>';
+  }
+
   function renderHome(){
     var container = document.getElementById('view-home');
     var balance = totalBalance();
@@ -1337,6 +1561,7 @@
       spendChartHtml() +
       trendChartHtml() +
       netWorthChartHtml() +
+      insightsHtml() +
       '<div class="section-head"><div class="section-title">Budgets</div><a href="#" class="link" id="link-budgets">View all</a></div>' +
       budgetSnapshot +
       '<div class="section-head"><div class="section-title">Recent Activity</div><a href="#" class="link" id="link-history">View all</a></div>' +
@@ -1586,6 +1811,7 @@
       else if(openSheetElm.id === 'backup-sheet') closeBackupSheet();
       else if(openSheetElm.id === 'accounts-sheet') closeAccountsSheet();
       else if(openSheetElm.id === 'categories-sheet') closeCategoriesSheet();
+      else if(openSheetElm.id === 'payoff-sheet') closePayoffSheet();
       return;
     }
     if(e.key === 'Tab'){
@@ -2422,6 +2648,68 @@
   function closeCategoriesSheet(){
     closeSheetEl(document.getElementById('categories-sheet'), document.getElementById('categories-overlay'));
   }
+
+  /* ---------- payoff calculator ---------- */
+  function renderPayoffResult(){
+    var sel = document.getElementById('payoff-account');
+    var out = document.getElementById('payoff-result');
+    var acct = state.accounts.find(function(a){ return a.id === sel.value; });
+    if(!acct){ out.innerHTML = ''; return; }
+    var owed = Math.max(0, -accountBalance(acct.id));
+    var apr = acct.apr || 0;
+    var payment = parseFloat(document.getElementById('payoff-payment').value);
+
+    var head = '<div class="payoff-facts">' +
+      '<div><span class="payoff-label">Balance</span><span class="payoff-value">' + fmt(owed) + '</span></div>' +
+      '<div><span class="payoff-label">Rate</span><span class="payoff-value">' + (apr > 0 ? apr + '% APR' : 'not set') + '</span></div>' +
+      '</div>';
+
+    if(owed <= 0){ out.innerHTML = head + '<div class="payoff-note pos">Nothing owed on this account.</div>'; return; }
+    if(isNaN(payment) || payment <= 0){ out.innerHTML = head + '<div class="payoff-note">Enter a monthly payment to see how long it takes.</div>'; return; }
+
+    var r = computePayoff(owed, apr, payment);
+    if(r.neverClears){
+      out.innerHTML = head +
+        '<div class="payoff-note neg">At ' + fmt(payment) + '/mo the balance never clears — interest alone is about ' +
+        fmt(r.firstMonthInterest) + ' this month, so the payment doesn\'t cover it.</div>';
+      return;
+    }
+
+    var years = Math.floor(r.months / 12), rem = r.months % 12;
+    var durationText = years > 0 ? (years + ' yr' + (years>1?'s':'') + (rem ? ' ' + rem + ' mo' : '')) : (r.months + ' month' + (r.months===1?'':'s'));
+
+    // A concrete comparison makes the trade-off legible without recommending one.
+    var bump = Math.round(payment * 0.25 / 10) * 10;
+    var comparison = '';
+    if(bump > 0){
+      var r2 = computePayoff(owed, apr, payment + bump);
+      if(!r2.neverClears && r2.months < r.months){
+        comparison = '<div class="payoff-note">Paying ' + fmt(payment + bump) + '/mo instead clears it in ' +
+          r2.months + ' months — <strong>' + (r.months - r2.months) + ' months sooner</strong>, saving ' +
+          fmt(r.totalInterest - r2.totalInterest) + ' in interest.</div>';
+      }
+    }
+
+    out.innerHTML = head +
+      '<div class="payoff-headline">' + durationText + '</div>' +
+      '<div class="payoff-sub">Paid off around ' + monthsOutLabel(r.months) + ' · ' + fmt(r.totalInterest) + ' total interest</div>' +
+      comparison;
+  }
+  function openPayoffSheet(accountId){
+    var liabilities = state.accounts.filter(function(a){ return isLiabilityType(a.type); });
+    if(liabilities.length === 0){ showToast('No loans or credit cards yet'); return; }
+    var sel = document.getElementById('payoff-account');
+    sel.innerHTML = liabilities.map(function(a){
+      return '<option value="' + escapeHtml(a.id) + '">' + escapeHtml(a.name) + '</option>';
+    }).join('');
+    if(accountId) sel.value = accountId;
+    document.getElementById('payoff-payment').value = '';
+    renderPayoffResult();
+    openSheetEl(document.getElementById('payoff-sheet'), document.getElementById('payoff-overlay'), document.getElementById('payoff-payment'));
+  }
+  function closePayoffSheet(){
+    closeSheetEl(document.getElementById('payoff-sheet'), document.getElementById('payoff-overlay'));
+  }
   async function addCategory(type){
     var input = document.getElementById(type === 'income' ? 'new-income-cat' : 'new-expense-cat');
     var name = input.value.trim();
@@ -2576,6 +2864,9 @@
     var networthCol = target.closest('.networth-col');
     if(networthCol){ showToast(networthCol.getAttribute('aria-label')); return; }
 
+    var payoffOpen = target.closest('.payoff-open');
+    if(payoffOpen){ openPayoffSheet(payoffOpen.dataset.id); return; }
+
     var delRecurringBtn = target.closest('.del-recurring');
     if(delRecurringBtn){ deleteRecurring(delRecurringBtn.closest('.recur-row').dataset.id); return; }
 
@@ -2682,6 +2973,11 @@
   document.getElementById('categories-close').addEventListener('click', closeCategoriesSheet);
   document.getElementById('add-expense-cat-btn').addEventListener('click', function(){ addCategory('expense'); });
   document.getElementById('add-income-cat-btn').addEventListener('click', function(){ addCategory('income'); });
+
+  document.getElementById('payoff-overlay').addEventListener('click', closePayoffSheet);
+  document.getElementById('payoff-close').addEventListener('click', closePayoffSheet);
+  document.getElementById('payoff-account').addEventListener('change', renderPayoffResult);
+  document.getElementById('payoff-payment').addEventListener('input', renderPayoffResult);
 
   /* ---------- init ---------- */
   async function init(){
