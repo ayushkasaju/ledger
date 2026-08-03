@@ -350,6 +350,10 @@
   .account-balance{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; margin-top:8px;}
   .account-starting{font-size:12px; color:var(--ink-soft); margin-top:6px; cursor:pointer;}
   .account-starting:hover{color:var(--ink);}
+  .account-apr{font-size:12px; color:var(--ink-soft); margin-top:4px; cursor:pointer;}
+  .account-apr:hover{color:var(--ink);}
+  .account-apr .inline-edit{width:80px;}
+  .account-apr-unset{font-style:italic; opacity:0.75;}
 
   /* account balance breakdown (home) */
   .acct-balances{margin-bottom:16px;}
@@ -685,6 +689,7 @@
   var CATEGORY_COLOR_SLOTS = ['var(--cat-1)','var(--cat-2)','var(--cat-3)','var(--cat-4)','var(--cat-5)','var(--cat-6)'];
   var CATEGORY_OTHER_COLOR = 'var(--cat-other)';
   var MONTH_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var INTEREST_CATEGORY = 'Interest';
   var RECUR_FREQ_DAYS = { weekly: 7 };
 
   var state = {
@@ -839,10 +844,14 @@
     }, 0);
     return startingSum + txSum;
   }
-  function accountBalance(accountId){
+  // asOfDate (optional, 'YYYY-MM-DD') counts only transactions on or before
+  // that date — needed when back-filling interest, since each past month's
+  // interest must be based on what was owed *then*, not today.
+  function accountBalance(accountId, asOfDate){
     var acct = state.accounts.find(function(a){ return a.id === accountId; });
     var starting = acct ? (acct.startingBalance || 0) : 0;
     var txSum = state.transactions.reduce(function(sum,t){
+      if(asOfDate && t.date > asOfDate) return sum;
       if(t.type === 'income' && t.accountId === accountId) return sum + t.amount;
       if(t.type === 'expense' && t.accountId === accountId) return sum - t.amount;
       if(t.type === 'adjustment' && t.accountId === accountId) return sum + t.amount;
@@ -2217,7 +2226,7 @@
     var bal = accountBalance(a.id);
     var colorClass = bal < 0 ? 'amt-neg' : 'amt-pos';
     var isLiability = isLiabilityType(a.type);
-    var startingLabel = isLiability ? 'Amount owed' : 'Starting balance';
+    var startingLabel = isLiability ? 'Starting amount owed' : 'Starting balance';
     // A liability's starting point is entered and shown as a positive "amount
     // owed" — never asking the user to type a negative number — and negated
     // internally so it still works as a normal (negative) contribution to net worth.
@@ -2232,7 +2241,49 @@
       '</div>' +
       '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div>' +
       '<div class="account-starting" role="button" tabindex="0" aria-label="Edit ' + startingLabel.toLowerCase() + ' for ' + escapeHtml(a.name) + ', currently ' + fmt(startingDisplay) + '">' + startingLabel + ': <span class="mono">' + fmt(startingDisplay) + '</span></div>' +
+      (isLiability ? accountAprHtml(a) : '') +
       '</div>';
+  }
+  function accountAprHtml(a){
+    var hasApr = a.apr && a.apr > 0;
+    var label = hasApr
+      ? 'Interest: <span class="mono">' + a.apr + '% APR</span>'
+      : 'Interest: <span class="account-apr-unset">not set</span>';
+    return '<div class="account-apr" role="button" tabindex="0" aria-label="Edit interest rate for ' + escapeHtml(a.name) + ', currently ' + (hasApr ? a.apr + ' percent APR' : 'not set') + '">' + label + '</div>';
+  }
+  function editAccountApr(card){
+    var id = card.dataset.id;
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    var el = card.querySelector('.account-apr');
+    el.removeAttribute('role');
+    el.removeAttribute('tabindex');
+    el.removeAttribute('aria-label');
+    el.innerHTML = 'Interest: <input class="inline-edit" type="number" inputmode="decimal" value="' + (acct.apr || '') + '" min="0" step="0.01" placeholder="0.00" aria-label="Annual interest rate for ' + escapeHtml(acct.name) + '"> % APR <button class="btn-tiny save-account-apr" type="button">Save</button>';
+    el.querySelector('.inline-edit').focus();
+  }
+  async function saveAccountApr(card){
+    var id = card.dataset.id;
+    var input = card.querySelector('.account-apr .inline-edit');
+    var raw = input.value.trim();
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    if(raw === ''){
+      delete acct.apr;
+      delete acct.nextInterestDate;
+    } else {
+      var val = parseFloat(raw);
+      if(isNaN(val) || val < 0){ flashError2(input); return; }
+      acct.apr = val;
+      // Start accruing a month from now rather than back-charging history the
+      // user never modelled — predictable, and never silently invents debt.
+      if(val > 0 && !acct.nextInterestDate) acct.nextInterestDate = nextRecurDate(todayISO(), 'monthly');
+      if(val === 0){ delete acct.apr; delete acct.nextInterestDate; }
+    }
+    try{
+      await saveAccounts();
+      renderAccountsList();
+      showToast(acct.apr ? 'Interest rate set' : 'Interest rate cleared');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not save'); }
   }
   function editAccountType(container){
     var id = container.dataset.id;
@@ -2284,7 +2335,7 @@
     var id = card.dataset.id;
     var acct = state.accounts.find(function(a){ return a.id === id; });
     var isLiability = isLiabilityType(acct.type);
-    var label = isLiability ? 'Amount owed' : 'Starting balance';
+    var label = isLiability ? 'Starting amount owed' : 'Starting balance';
     var displayVal = isLiability ? -(acct.startingBalance || 0) : (acct.startingBalance || 0);
     var el = card.querySelector('.account-starting');
     el.removeAttribute('role');
@@ -2304,7 +2355,7 @@
     try{
       await saveAccounts();
       renderAccountsList();
-      showToast((isLiability ? 'Amount owed' : 'Starting balance') + ' updated');
+      showToast((isLiability ? 'Starting amount owed' : 'Starting balance') + ' updated');
       renderCurrentTab();
     }catch(e){ showToast('Could not save'); }
   }
@@ -2418,6 +2469,51 @@
     });
     return generated;
   }
+
+  /* ---------- loan / credit interest ---------- */
+  // Liabilities with an APR accrue interest monthly, otherwise the balance only
+  // ever moves down (by payments) and drifts optimistic. Posted as a normal
+  // expense transaction so it flows through balances, net worth, history, CSV
+  // and stays editable/deletable like anything else — interest really is a cost
+  // that reduces net worth, so it belongs in those numbers.
+  //
+  // This is an estimate: real servicers accrue daily on their own schedule, so
+  // expect small drift from your statement.
+  function processInterest(){
+    var today = todayISO();
+    var generated = 0;
+    var datesAdvanced = false;
+    var cap = 24; // bounded like processRecurring, so a stale date can't spin
+    state.accounts.forEach(function(a){
+      if(!isLiabilityType(a.type)) return;
+      if(!a.apr || a.apr <= 0 || !a.nextInterestDate) return;
+      var iterations = 0;
+      while(a.nextInterestDate <= today && iterations < cap){
+        datesAdvanced = true;
+        // Balance as of the accrual date, which already includes any interest
+        // posted by earlier iterations — so it compounds correctly.
+        var owed = Math.max(0, -accountBalance(a.id, a.nextInterestDate));
+        if(owed > 0){
+          var interest = Math.round(owed * ((a.apr / 100) / 12) * 100) / 100;
+          if(interest > 0){
+            state.transactions.unshift({
+              id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+              type: 'expense', amount: interest, category: INTEREST_CATEGORY,
+              accountId: a.id, note: a.apr + '% APR', date: a.nextInterestDate, auto: true
+            });
+            generated++;
+          }
+        }
+        a.nextInterestDate = nextRecurDate(a.nextInterestDate, 'monthly');
+        iterations++;
+      }
+    });
+    // datesAdvanced is reported separately from generated: a paid-off account
+    // posts nothing but its date must still be persisted, or a long-stale date
+    // would re-scan the same capped window forever and never reach the present.
+    return { generated: generated, datesAdvanced: datesAdvanced };
+  }
+
   function recurRow(r){
     var freqLabel = r.frequency === 'weekly' ? 'Weekly' : 'Monthly';
     var sign = r.type === 'income' ? '+' : '-';
@@ -2504,11 +2600,17 @@
     var saveStartingBtn = e.target.closest('.save-account-starting');
     if(saveStartingBtn){ saveAccountStarting(saveStartingBtn.closest('.account-card')); return; }
 
+    var saveAprBtn = e.target.closest('.save-account-apr');
+    if(saveAprBtn){ saveAccountApr(saveAprBtn.closest('.account-card')); return; }
+
     var nameEdit = e.target.closest('.account-name-edit');
     if(nameEdit && !nameEdit.querySelector('.inline-edit')){ editAccountName(nameEdit.closest('.account-card')); return; }
 
     var startingEdit = e.target.closest('.account-starting');
     if(startingEdit && !startingEdit.querySelector('.inline-edit')){ editAccountStarting(startingEdit.closest('.account-card')); return; }
+
+    var aprEdit = e.target.closest('.account-apr');
+    if(aprEdit && !aprEdit.querySelector('.inline-edit')){ editAccountApr(aprEdit.closest('.account-card')); return; }
 
     var typeToggleBtn = e.target.closest('.account-type-toggle .type-btn');
     if(typeToggleBtn){ saveAccountType(typeToggleBtn.closest('.account-type-edit').dataset.id, typeToggleBtn.dataset.type); return; }
@@ -2521,7 +2623,9 @@
     var nameEdit = e.target.closest('.account-name-edit[role="button"]');
     if(nameEdit){ e.preventDefault(); editAccountName(nameEdit.closest('.account-card')); return; }
     var startingEdit = e.target.closest('.account-starting[role="button"]');
-    if(startingEdit){ e.preventDefault(); editAccountStarting(startingEdit.closest('.account-card')); }
+    if(startingEdit){ e.preventDefault(); editAccountStarting(startingEdit.closest('.account-card')); return; }
+    var aprEdit = e.target.closest('.account-apr[role="button"]');
+    if(aprEdit){ e.preventDefault(); editAccountApr(aprEdit.closest('.account-card')); }
   });
   document.getElementById('categories-sheet').addEventListener('click', function(e){
     var delBtn = e.target.closest('.chip-del');
@@ -2593,11 +2697,25 @@
       await saveTransactions();
       await saveRecurring();
     }
+    // Interest runs after recurring so a recurring loan payment posted this
+    // session is already reflected in the balance interest is charged on.
+    var interest = processInterest();
+    var interestGenerated = interest.generated;
+    if(interestGenerated > 0){
+      if(state.categories.expense.indexOf(INTEREST_CATEGORY) === -1){
+        state.categories.expense.push(INTEREST_CATEGORY);
+        await saveCategories();
+      }
+      await saveTransactions();
+    }
+    if(interest.datesAdvanced) await saveAccounts();
     document.getElementById('loading').style.display = 'none';
     document.getElementById('app-content').style.display = 'flex';
     switchTab('home');
     if(recurringGenerated > 0){
       showToast(recurringGenerated === 1 ? 'Added 1 recurring transaction' : 'Added ' + recurringGenerated + ' recurring transactions');
+    } else if(interestGenerated > 0){
+      showToast(interestGenerated === 1 ? 'Posted 1 interest charge' : 'Posted ' + interestGenerated + ' interest charges');
     }
   }
   init();
