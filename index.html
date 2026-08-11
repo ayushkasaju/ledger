@@ -208,6 +208,30 @@
   .budget-unbudgeted-amt{font-family:'IBM Plex Mono',monospace; font-size:17px; font-weight:600; color:var(--ink-soft);}
   .budget-unbudgeted-label{font-size:12px; color:var(--ink-soft); margin-top:3px; line-height:1.45;}
 
+  /* debt section */
+  .debt-summary{margin-bottom:14px;}
+  .debt-summary-top{display:flex; align-items:flex-start; justify-content:space-between; gap:12px;}
+  .debt-summary-label{font-size:11px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.06em;}
+  .debt-summary-amt{font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600; color:var(--brick); margin-top:3px;}
+  .debt-summary-side{text-align:right;}
+  .debt-summary-sub{font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:600; color:var(--ink-soft); margin-top:3px;}
+  .debt-summary-foot{font-size:12px; color:var(--ink-soft); margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
+  .debt-head{display:flex; align-items:flex-start; justify-content:space-between; gap:10px;}
+  .debt-info{min-width:0;}
+  .debt-name{font-weight:600; font-size:14px;}
+  .debt-meta{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
+  .debt-owed{font-family:'IBM Plex Mono',monospace; font-size:15px; font-weight:600; color:var(--brick); flex-shrink:0;}
+  .debt-progress-label{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--ink-soft); margin-top:9px;}
+  .debt-budget-row{
+    font-size:12.5px; color:var(--ink-soft); margin-top:9px; cursor:pointer;
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
+  }
+  .debt-budget-row:hover{color:var(--ink);}
+  .debt-set-budget{color:var(--teal-text); font-weight:600;}
+  .debt-payoff-row{margin-top:7px;}
+  .debt-payoff{font-size:11.5px; color:var(--ink-soft); line-height:1.45;}
+  .debt-payoff.neg{color:var(--brick);}
+
   /* insights */
   .insights-card{padding:4px 14px;}
   .insight-row{
@@ -517,11 +541,16 @@
   }
 
   /* toast */
+  /* Sits clear above the FAB rather than beside it — anchored to the FAB's own
+     geometry (nav + gap + its 56px height) so the two can never collide, and
+     wraps instead of running off-screen on longer messages. */
   .toast{
-    position:absolute; left:50%; bottom:96px; transform:translate(-50%,10px);
-    background:var(--ink); color:var(--paper); padding:10px 18px; border-radius:20px;
-    font-size:13px; font-weight:500; opacity:0; pointer-events:none; transition:all 0.25s ease; z-index:30;
-    white-space:nowrap;
+    position:absolute; left:50%; transform:translate(-50%,10px);
+    bottom:calc(var(--nav-h) + env(safe-area-inset-bottom) + 94px);
+    background:var(--ink); color:var(--paper); padding:10px 18px; border-radius:18px;
+    font-size:13px; font-weight:500; line-height:1.45; text-align:center;
+    opacity:0; pointer-events:none; transition:all 0.25s ease; z-index:30;
+    max-width:calc(100% - 44px);
   }
   .toast.show{opacity:1; transform:translate(-50%,0);}
 
@@ -758,7 +787,12 @@
 
   var state = {
     transactions: [], budgets: {}, goals: [],
-    accounts: [], categories: { expense: [], income: [] }, categoryColors: {}, recurring: []
+    accounts: [], categories: { expense: [], income: [] }, categoryColors: {}, recurring: [],
+    // Monthly payment targets for liability accounts, keyed by account id.
+    // Kept separate from `budgets` (keyed by category) because debt payments are
+    // transfers, not expenses — they move money between your own accounts rather
+    // than leaving your net worth, so they can't live in the category system.
+    debtBudgets: {}
   };
   var activeTab = 'home';
   var txType = 'expense'; // 'expense' | 'income' | 'transfer'
@@ -788,11 +822,18 @@
   // and shown as a positive "amount owed," negated internally.
   function isLiabilityType(type){ return type === 'credit' || type === 'loan'; }
   function hasInvestmentAccount(){ return state.accounts.some(function(a){ return a.type === 'investment'; }); }
+  // "Other" is the catch-all bucket, so it always reads last no matter when it
+  // or any custom category was added. Enforced at every mutation point rather
+  // than at each render, so the stored order stays correct too.
+  function pinOtherLast(list){
+    var rest = list.filter(function(c){ return c !== 'Other'; });
+    return list.indexOf('Other') !== -1 ? rest.concat(['Other']) : rest;
+  }
   function normalizeCategories(obj){
     if(!obj || !Array.isArray(obj.expense) || !Array.isArray(obj.income)){
       return { expense: DEFAULT_EXPENSE_CATS.slice(), income: DEFAULT_INCOME_CATS.slice() };
     }
-    return obj;
+    return { expense: pinOtherLast(obj.expense), income: pinOtherLast(obj.income) };
   }
   function migrateTransactionAccounts(transactions, accounts){
     var migrated = false;
@@ -824,7 +865,10 @@
       var c = localStorage.getItem('ledger:categories');
       state.categories = c ? JSON.parse(c) : null;
     }catch(e){ state.categories = null; }
+    var rawCategories = c;
     state.categories = normalizeCategories(state.categories);
+    // Persist if normalising changed the order, so exports match what's shown.
+    if(rawCategories && rawCategories !== JSON.stringify(state.categories)) await saveCategories();
     try{
       var cc = localStorage.getItem('ledger:categoryColors');
       state.categoryColors = cc ? JSON.parse(cc) : {};
@@ -833,6 +877,10 @@
       var r = localStorage.getItem('ledger:recurring');
       state.recurring = r ? JSON.parse(r) : [];
     }catch(e){ state.recurring = []; }
+    try{
+      var db = localStorage.getItem('ledger:debtBudgets');
+      state.debtBudgets = db ? JSON.parse(db) : {};
+    }catch(e){ state.debtBudgets = {}; }
 
     if(migrateTransactionAccounts(state.transactions, state.accounts)) await saveTransactions();
 
@@ -863,6 +911,7 @@
   async function saveCategories(){ localStorage.setItem('ledger:categories', JSON.stringify(state.categories)); }
   async function saveCategoryColors(){ localStorage.setItem('ledger:categoryColors', JSON.stringify(state.categoryColors)); }
   async function saveRecurring(){ localStorage.setItem('ledger:recurring', JSON.stringify(state.recurring)); }
+  async function saveDebtBudgets(){ localStorage.setItem('ledger:debtBudgets', JSON.stringify(state.debtBudgets)); }
 
   function getCategoryColor(name){
     if(name === 'Other') return CATEGORY_OTHER_COLOR;
@@ -980,6 +1029,64 @@
   }
   // Expense spending this month in categories that have no budget set — a
   // blind spot otherwise, since the Budgets tab only lists budgeted categories.
+  /* ---------- debt tracking ---------- */
+  function liabilityAccounts(){
+    return state.accounts.filter(function(a){ return isLiabilityType(a.type); });
+  }
+  // What you've actually paid toward a liability this month — transfers into it.
+  // Interest charged BY the loan is excluded; that's a cost, not a payment.
+  function debtPaidThisMonth(accountId){
+    return currentMonthTransactions().reduce(function(s,t){
+      return (t.type === 'transfer' && t.toAccountId === accountId) ? s + t.amount : s;
+    }, 0);
+  }
+  // Average monthly payment over the last N whole months, used to project a
+  // payoff date when no explicit budget has been set.
+  function averageDebtPayment(accountId, monthsBack){
+    var now = new Date(), total = 0, seen = 0;
+    for(var i=1;i<=monthsBack;i++){
+      var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      var m = state.transactions.reduce(function(s,t){
+        if(t.type !== 'transfer' || t.toAccountId !== accountId) return s;
+        var td = new Date(t.date + 'T00:00:00');
+        return (td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth()) ? s + t.amount : s;
+      }, 0);
+      if(m > 0){ total += m; seen++; }
+    }
+    return seen > 0 ? total / seen : 0;
+  }
+  function interestPaidOnAccount(accountId){
+    return state.transactions.reduce(function(s,t){
+      return (t.type === 'expense' && t.accountId === accountId && t.category === INTEREST_CATEGORY) ? s + t.amount : s;
+    }, 0);
+  }
+  function debtSummary(){
+    var accts = liabilityAccounts().map(function(a){
+      var owed = Math.max(0, -accountBalance(a.id));
+      var apr = a.apr || 0;
+      return {
+        id: a.id, name: a.name, type: a.type, apr: apr, owed: owed,
+        monthlyInterest: owed * (apr/100/12),
+        opening: Math.max(0, -(a.startingBalance || 0)),
+        budget: state.debtBudgets[a.id] || 0,
+        paidThisMonth: debtPaidThisMonth(a.id),
+        avgPayment: averageDebtPayment(a.id, 6),
+        interestPaid: interestPaidOnAccount(a.id)
+      };
+    }).filter(function(d){ return d.owed > 0 || d.budget > 0; });
+    accts.sort(function(x,y){ return y.owed - x.owed; });
+    return {
+      accounts: accts,
+      totalOwed: accts.reduce(function(s,d){ return s + d.owed; }, 0),
+      totalMonthlyInterest: accts.reduce(function(s,d){ return s + d.monthlyInterest; }, 0),
+      totalBudgeted: accts.reduce(function(s,d){ return s + d.budget; }, 0),
+      totalPaidThisMonth: accts.reduce(function(s,d){ return s + d.paidThisMonth; }, 0),
+      // Only payments on accounts that actually have a target, so the
+      // "paid X of Y targeted" comparison is like-for-like.
+      paidOnBudgeted: accts.reduce(function(s,d){ return d.budget > 0 ? s + d.paidThisMonth : s; }, 0)
+    };
+  }
+
   function unbudgetedSpending(){
     var total = 0;
     var cats = {};
@@ -1303,6 +1410,77 @@
       '<div class="form-row"><select id="new-budget-cat" aria-label="Category">' + opts + '</select></div>' +
       '<div class="form-row"><input id="new-budget-limit" type="number" inputmode="decimal" placeholder="Monthly limit" aria-label="Monthly limit" min="0" step="1"></div>' +
       '<button id="add-budget-btn" class="btn-secondary" type="button">+ Add budget</button></div>';
+  }
+
+  /* ---------- debt payment cards ---------- */
+  function debtCard(d){
+    var pace = monthProgress();
+    var pct = d.budget > 0 ? Math.round((d.paidThisMonth / d.budget) * 100) : 0;
+    var progressPct = d.opening > 0 ? Math.max(0, Math.min(100, Math.round((1 - d.owed / d.opening) * 100))) : 0;
+
+    // Payoff estimate uses the budgeted payment, falling back to the recent
+    // average so a loan still projects before you've set a target.
+    // Prefer an explicit target, then recent history, then what's been paid
+    // this month — so a projection appears from the very first payment.
+    var basis = d.budget > 0 ? d.budget : (d.avgPayment > 0 ? d.avgPayment : d.paidThisMonth);
+    var payoffText = '';
+    if(basis > 0 && d.owed > 0){
+      var r = computePayoff(d.owed, d.apr, basis);
+      payoffText = r.neverClears
+        ? '<span class="debt-payoff neg">' + fmt(basis) + '/mo doesn\'t cover the ' + fmt(d.monthlyInterest) + ' interest</span>'
+        : '<span class="debt-payoff">Clear by ' + monthsOutLabel(r.months) + ' at ' + fmt(basis) + '/mo · ' + fmt(r.totalInterest) + ' more interest</span>';
+    }
+
+    var statusHtml = '';
+    if(d.budget > 0){
+      if(d.paidThisMonth >= d.budget){
+        statusHtml = '<div class="budget-status ok">Paid in full this month</div>';
+      } else {
+        var short = d.budget - d.paidThisMonth;
+        var behind = pace.fraction > 0.7 && d.paidThisMonth === 0;
+        statusHtml = '<div class="budget-status ' + (behind ? 'over' : '') + '">' + fmt(short) + ' still to pay this month</div>';
+      }
+    }
+
+    var rateBit = d.apr > 0
+      ? d.apr + '% · ' + fmt(d.monthlyInterest) + '/mo interest'
+      : '<span class="account-apr-unset">no rate set</span>';
+
+    return '<div class="card debt-card" data-id="' + escapeHtml(d.id) + '">' +
+      '<div class="debt-head">' +
+        '<div class="debt-info"><div class="debt-name">' + escapeHtml(d.name) + '</div>' +
+        '<div class="debt-meta">' + rateBit + '</div></div>' +
+        '<div class="debt-owed">' + fmt(d.owed) + '</div>' +
+      '</div>' +
+      (d.opening > 0 ? '<div class="debt-progress-label">' + progressPct + '% paid off</div>' + gaugeBar(d.opening - d.owed, d.opening) : '') +
+      '<div class="debt-budget-row" role="button" tabindex="0" data-id="' + escapeHtml(d.id) + '" aria-label="Set monthly payment target for ' + escapeHtml(d.name) + '">' +
+        (d.budget > 0
+          ? 'Paid <span class="mono">' + fmt(d.paidThisMonth) + '</span> of <span class="mono">' + fmt(d.budget) + '</span> this month · ' + pct + '%'
+          : '<span class="debt-set-budget">+ Set a monthly payment target</span>') +
+      '</div>' +
+      statusHtml +
+      (payoffText ? '<div class="debt-payoff-row">' + payoffText + '</div>' : '') +
+      '</div>';
+  }
+
+  function debtSectionHtml(){
+    var s = debtSummary();
+    if(s.accounts.length === 0) return '';
+    var summary =
+      '<div class="card debt-summary">' +
+        '<div class="debt-summary-top">' +
+          '<div><div class="debt-summary-label">Total owed</div>' +
+          '<div class="debt-summary-amt">' + fmt(s.totalOwed) + '</div></div>' +
+          '<div class="debt-summary-side"><div class="debt-summary-label">Interest</div>' +
+          '<div class="debt-summary-sub">' + fmt(s.totalMonthlyInterest) + '/mo</div></div>' +
+        '</div>' +
+        (s.totalBudgeted > 0
+          ? '<div class="debt-summary-foot">Targets: ' + fmt(s.paidOnBudgeted) + ' of ' + fmt(s.totalBudgeted) +
+            ' &middot; ' + fmt(s.totalPaidThisMonth) + ' paid to debt overall this month</div>'
+          : '<div class="debt-summary-foot">No payment targets set yet — tap a loan below to set one.</div>') +
+      '</div>';
+    return '<div class="section-head"><div class="section-title">Debt</div></div>' +
+      summary + s.accounts.map(debtCard).join('');
   }
 
   // A goal tracks progress one of three ways:
@@ -1653,7 +1831,8 @@
       : '';
 
     container.innerHTML = '<div class="section-title">Monthly Budgets</div>' +
-      summaryHtml + empty + rows + unbudgetedHtml + addBudgetForm();
+      summaryHtml + empty + rows + unbudgetedHtml + addBudgetForm() +
+      debtSectionHtml();
   }
 
   function renderGoals(){
@@ -1970,9 +2149,9 @@
     var input = document.getElementById('tx-new-category');
     var name = input.value.trim();
     if(!name){ flashError2(input); return; }
-    var list = state.categories[txType === 'income' ? 'income' : 'expense'];
-    if(list.indexOf(name) === -1){
-      list.push(name);
+    var kind = txType === 'income' ? 'income' : 'expense';
+    if(state.categories[kind].indexOf(name) === -1){
+      state.categories[kind] = pinOtherLast(state.categories[kind].concat([name]));
       try{ await saveCategories(); }
       catch(e){ showToast('Could not save category'); return; }
     }
@@ -2203,6 +2382,31 @@
     try{ await saveBudgets(); showToast('Budget updated'); renderCurrentTab(); }
     catch(e){ showToast('Could not save'); }
   }
+  function editDebtBudget(row){
+    var id = row.dataset.id;
+    var current = state.debtBudgets[id] || '';
+    row.removeAttribute('role');
+    row.removeAttribute('tabindex');
+    row.removeAttribute('aria-label');
+    row.innerHTML = '<span class="apr-edit-unit">Pay</span> <input class="inline-edit debt-budget-input" type="number" inputmode="decimal" value="' + current + '" min="0" step="10" placeholder="0.00" aria-label="Monthly payment target"> <span class="apr-edit-unit">/mo</span> ' +
+      '<button class="btn-tiny save-debt-budget" type="button">Save</button>' +
+      (current !== '' ? ' <button class="btn-text-danger clear-debt-budget" type="button">Clear</button>' : '');
+    row.querySelector('.inline-edit').focus();
+  }
+  async function saveDebtBudget(row){
+    var id = row.dataset.id;
+    var input = row.querySelector('.debt-budget-input');
+    var val = parseFloat(input.value);
+    if(!val || val <= 0){ flashError2(input); return; }
+    state.debtBudgets[id] = val;
+    try{ await saveDebtBudgets(); showToast('Payment target set'); renderCurrentTab(); }
+    catch(e){ showToast('Could not save'); }
+  }
+  async function clearDebtBudget(row){
+    delete state.debtBudgets[row.dataset.id];
+    try{ await saveDebtBudgets(); showToast('Payment target removed'); renderCurrentTab(); }
+    catch(e){ showToast('Could not save'); }
+  }
   function handleReset(btn){
     if(!resetArmed){
       resetArmed = true;
@@ -2219,7 +2423,7 @@
     state = {
       transactions: [], budgets: {}, goals: [],
       accounts: normalizeAccounts([]), categories: normalizeCategories(null),
-      categoryColors: {}, recurring: []
+      categoryColors: {}, recurring: [], debtBudgets: {}
     };
     try{
       await saveTransactions();
@@ -2229,6 +2433,7 @@
       await saveCategories();
       await saveCategoryColors();
       await saveRecurring();
+      await saveDebtBudgets();
       showToast('All data cleared');
       switchTab('home');
     }catch(e){ showToast('Could not clear data'); }
@@ -2404,7 +2609,8 @@
       app: 'ledger', version: 2, exportedAt: new Date().toISOString(),
       transactions: state.transactions, budgets: state.budgets, goals: state.goals,
       accounts: state.accounts, categories: state.categories,
-      categoryColors: state.categoryColors, recurring: state.recurring
+      categoryColors: state.categoryColors, recurring: state.recurring,
+      debtBudgets: state.debtBudgets
     };
     var blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
@@ -2473,7 +2679,8 @@
         transactions: data.transactions, budgets: data.budgets || {}, goals: data.goals,
         accounts: accounts, categories: normalizeCategories(data.categories),
         categoryColors: (data.categoryColors && typeof data.categoryColors === 'object') ? data.categoryColors : {},
-        recurring: Array.isArray(data.recurring) ? data.recurring : []
+        recurring: Array.isArray(data.recurring) ? data.recurring : [],
+        debtBudgets: (data.debtBudgets && typeof data.debtBudgets === 'object') ? data.debtBudgets : {}
       };
       var dateLabel = data.exportedAt ? formatDate(String(data.exportedAt).slice(0,10)) : 'unknown date';
       showRestorePreview(pendingRestore, dateLabel);
@@ -2486,7 +2693,8 @@
     state = {
       transactions: pendingRestore.transactions, budgets: pendingRestore.budgets, goals: pendingRestore.goals,
       accounts: pendingRestore.accounts, categories: pendingRestore.categories,
-      categoryColors: pendingRestore.categoryColors, recurring: pendingRestore.recurring
+      categoryColors: pendingRestore.categoryColors, recurring: pendingRestore.recurring,
+      debtBudgets: pendingRestore.debtBudgets
     };
     try{
       await saveTransactions();
@@ -2496,6 +2704,7 @@
       await saveCategories();
       await saveCategoryColors();
       await saveRecurring();
+      await saveDebtBudgets();
       pendingRestore = null;
       closeBackupSheet();
       showToast('Backup restored');
@@ -2783,9 +2992,8 @@
     var input = document.getElementById(type === 'income' ? 'new-income-cat' : 'new-expense-cat');
     var name = input.value.trim();
     if(!name){ flashError2(input); return; }
-    var list = state.categories[type];
-    if(list.indexOf(name) !== -1){ showToast('Already have that category'); return; }
-    list.push(name);
+    if(state.categories[type].indexOf(name) !== -1){ showToast('Already have that category'); return; }
+    state.categories[type] = pinOtherLast(state.categories[type].concat([name]));
     try{
       await saveCategories();
       input.value = '';
@@ -2908,6 +3116,15 @@
     var delBudgetBtn = target.closest('.del-budget');
     if(delBudgetBtn){ deleteBudget(delBudgetBtn.closest('.budget-card').dataset.cat); return; }
 
+    var saveDebtBtn = target.closest('.save-debt-budget');
+    if(saveDebtBtn){ saveDebtBudget(saveDebtBtn.closest('.debt-budget-row')); return; }
+
+    var clearDebtBtn = target.closest('.clear-debt-budget');
+    if(clearDebtBtn){ clearDebtBudget(clearDebtBtn.closest('.debt-budget-row')); return; }
+
+    var debtRow = target.closest('.debt-budget-row');
+    if(debtRow && !debtRow.querySelector('.inline-edit')){ editDebtBudget(debtRow); return; }
+
     var budgetAmounts = target.closest('.budget-amounts');
     if(budgetAmounts && !budgetAmounts.querySelector('.inline-edit')){ editBudgetLimit(budgetAmounts.closest('.budget-card')); return; }
 
@@ -3000,7 +3217,9 @@
     var budgetAmounts = e.target.closest('.budget-amounts[role="button"]');
     if(budgetAmounts){ e.preventDefault(); editBudgetLimit(budgetAmounts.closest('.budget-card')); return; }
     var goalAmounts = e.target.closest('.goal-amounts[role="button"]');
-    if(goalAmounts){ e.preventDefault(); editGoalTarget(goalAmounts.closest('.goal-card')); }
+    if(goalAmounts){ e.preventDefault(); editGoalTarget(goalAmounts.closest('.goal-card')); return; }
+    var debtRow = e.target.closest('.debt-budget-row[role="button"]');
+    if(debtRow){ e.preventDefault(); editDebtBudget(debtRow); }
   });
 
   document.querySelectorAll('.nav-btn').forEach(function(btn){
@@ -3068,7 +3287,7 @@
     var interestGenerated = interest.generated;
     if(interestGenerated > 0){
       if(state.categories.expense.indexOf(INTEREST_CATEGORY) === -1){
-        state.categories.expense.push(INTEREST_CATEGORY);
+        state.categories.expense = pinOtherLast(state.categories.expense.concat([INTEREST_CATEGORY]));
         await saveCategories();
       }
       await saveTransactions();

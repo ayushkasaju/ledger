@@ -1,5 +1,5 @@
 // Bump this version string every time you redeploy so old caches get cleared.
-const CACHE_NAME = 'ledger-cache-v16';
+const CACHE_NAME = 'ledger-cache-v17';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
