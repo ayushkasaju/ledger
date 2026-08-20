@@ -198,6 +198,7 @@
   .budget-summary-amounts{font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; color:var(--ink);}
   .budget-summary-of{font-size:14px; color:var(--ink-soft); font-weight:500;}
   .budget-summary-sub{font-size:12px; color:var(--ink-soft); margin-top:3px;}
+  .budget-summary-split{font-size:11.5px; color:var(--ink-soft); margin-top:10px; padding-top:10px; border-top:1px solid var(--line); line-height:1.5;}
   .budget-summary-flag{
     flex-shrink:0; font-size:11px; font-weight:600; color:var(--brick);
     background:rgba(168,69,47,0.10); border-radius:20px; padding:4px 10px; white-space:nowrap;
@@ -422,6 +423,7 @@
   .apr-edit-row{display:flex; align-items:center; gap:7px; margin-bottom:7px; flex-wrap:wrap;}
   .apr-edit-row .inline-edit{width:74px;}
   .apr-edit-unit{font-size:12px; color:var(--ink-soft);}
+  .tx-interest-hint{font-size:11.5px; color:var(--ink-soft); line-height:1.45; margin-top:6px;}
   .apr-edit-hint{font-size:11.5px; color:var(--ink-soft); line-height:1.45; margin:2px 0 9px; opacity:0.9;}
 
   /* account balance breakdown (home) */
@@ -650,6 +652,11 @@
       <div class="form-group">
         <label for="tx-to-account">To account</label>
         <select id="tx-to-account"></select>
+      </div>
+      <div id="tx-interest-group" class="form-group" style="display:none;">
+        <label for="tx-interest">Interest portion of this payment</label>
+        <input id="tx-interest" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+        <div class="tx-interest-hint" id="tx-interest-hint"></div>
       </div>
     </div>
     <div class="form-group">
@@ -1289,7 +1296,11 @@
   function gaugeBar(spent, limit, paceFraction){
     var safeLimit = limit > 0 ? limit : 0;
     var rawPct = safeLimit > 0 ? (spent/safeLimit)*100 : 0;
-    var pct = Math.min(100, rawPct);
+    // Clamp at zero as well as 100: a negative width is an invalid CSS
+    // declaration, which the browser drops entirely — leaving the fill at its
+    // default auto width and rendering a *full* bar for negative progress.
+    // Happens on a debt that has grown past its opening balance.
+    var pct = Math.max(0, Math.min(100, rawPct));
     var over = safeLimit > 0 && spent > safeLimit;
     var colorClass;
     if(over){
@@ -1786,15 +1797,27 @@
     var cats = Object.keys(state.budgets);
     var pace = monthProgress();
 
+    // Debt payment targets are budget line items too — a loan payment is just as
+    // much a monthly commitment as rent, so the headline total covers both.
+    var debt = debtSummary();
+    var debtBudgeted = debt.totalBudgeted;
+    var debtPaid = debt.paidOnBudgeted;
+
     var summaryHtml = '';
     var rows = '';
-    if(cats.length > 0){
-      var totalBudgeted = cats.reduce(function(s,c){ return s + state.budgets[c]; }, 0);
-      var totalSpent = cats.reduce(function(s,c){ return s + categorySpent(c); }, 0);
+    if(cats.length > 0 || debtBudgeted > 0){
+      var catBudgeted = cats.reduce(function(s,c){ return s + state.budgets[c]; }, 0);
+      var catSpent = cats.reduce(function(s,c){ return s + categorySpent(c); }, 0);
+      var totalBudgeted = catBudgeted + debtBudgeted;
+      var totalSpent = catSpent + debtPaid;
       var overCount = cats.filter(function(c){ return categorySpent(c) > state.budgets[c]; }).length;
       var summaryPct = totalBudgeted > 0 ? Math.round((totalSpent/totalBudgeted)*100) : 0;
       var overNote = overCount > 0
         ? '<span class="budget-summary-flag">' + overCount + ' over limit</span>'
+        : '';
+      var splitNote = debtBudgeted > 0
+        ? '<div class="budget-summary-split">' + fmt(catSpent) + ' of ' + fmt(catBudgeted) + ' spending &middot; ' +
+          fmt(debtPaid) + ' of ' + fmt(debtBudgeted) + ' debt payments</div>'
         : '';
 
       summaryHtml =
@@ -1805,6 +1828,7 @@
             overNote +
           '</div>' +
           gaugeBar(totalSpent, totalBudgeted, pace.fraction) +
+          splitNote +
         '</div>';
 
       // Sort by urgency: over-budget first, then by how much of the limit is
@@ -2055,6 +2079,42 @@
     document.getElementById('tx-to-account').innerHTML = opts;
     if(state.accounts.length > 1) document.getElementById('tx-to-account').selectedIndex = 1;
   }
+  // A payment into a loan or card is really two things: the part that clears
+  // interest (money genuinely gone) and the part that reduces principal (money
+  // moved, net worth unchanged). Showing the split here lets us record both
+  // correctly from one entry, matching how a statement breaks the payment down.
+  function makeInterestRow(amount, loanAccountId, date, linkId){
+    var row = {
+      id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7) + '_i',
+      type: 'expense', amount: amount, category: INTEREST_CATEGORY,
+      accountId: loanAccountId, note: 'Interest portion of payment', date: date
+    };
+    if(linkId) row.linkId = linkId;
+    return row;
+  }
+
+  function refreshTransferInterestField(){
+    var toSel = document.getElementById('tx-to-account');
+    var group = document.getElementById('tx-interest-group');
+    var input = document.getElementById('tx-interest');
+    var hint = document.getElementById('tx-interest-hint');
+    var acct = state.accounts.find(function(a){ return a.id === toSel.value; });
+    if(!acct || !isLiabilityType(acct.type)){
+      group.style.display = 'none';
+      input.value = '';
+      return;
+    }
+    group.style.display = '';
+    var owed = Math.max(0, -accountBalance(acct.id));
+    if(acct.apr > 0 && owed > 0){
+      var est = Math.round(owed * ((acct.apr/100)/12) * 100) / 100;
+      if(!input.dataset.touched) input.value = est.toFixed(2);
+      hint.textContent = 'Estimated at ' + acct.apr + '% on ' + fmt(owed) + '. Use your statement\u2019s figure if it differs; the rest goes to principal.';
+    } else {
+      hint.textContent = 'Enter the interest shown on your statement, or leave blank if none. The rest goes to principal.';
+    }
+  }
+
   function updateTypeToggle(){
     document.getElementById('type-expense').classList.toggle('active', txType === 'expense');
     document.getElementById('type-income').classList.toggle('active', txType === 'income');
@@ -2070,6 +2130,7 @@
     var showAccountPicker = !isTransfer && (state.accounts.length > 1 || isAdjustment);
     document.getElementById('tx-account-group').style.display = showAccountPicker ? '' : 'none';
     document.getElementById('tx-transfer-group').style.display = isTransfer ? 'block' : 'none';
+    if(isTransfer) refreshTransferInterestField();
     document.getElementById('tx-repeat-group').style.display = (isTransfer || isAdjustment) ? 'none' : '';
     document.getElementById('tx-amount-label').textContent = isAdjustment ? 'New value' : 'Amount';
   }
@@ -2093,6 +2154,7 @@
     document.getElementById('tx-repeat').value = '';
     document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
     document.getElementById('type-adjust').style.display = hasInvestmentAccount() ? '' : 'none';
+    document.getElementById('tx-interest').dataset.touched = '';
     populateAccountSelects();
     updateTypeToggle();
     populateCategorySelect();
@@ -2113,12 +2175,20 @@
     document.getElementById('tx-repeat').value = '';
     document.getElementById('type-transfer').style.display = state.accounts.length > 1 ? '' : 'none';
     document.getElementById('type-adjust').style.display = hasInvestmentAccount() ? '' : 'none';
+    document.getElementById('tx-interest').dataset.touched = '';
     populateAccountSelects();
     updateTypeToggle();
     document.getElementById('tx-repeat-group').style.display = 'none';
     if(txType === 'transfer'){
       document.getElementById('tx-from-account').value = tx.accountId;
       document.getElementById('tx-to-account').value = tx.toAccountId;
+      refreshTransferInterestField();
+      var linkedInterest = tx.linkId ? state.transactions.find(function(t){
+        return t.linkId === tx.linkId && t.id !== tx.id && t.type === 'expense';
+      }) : null;
+      var iEl = document.getElementById('tx-interest');
+      if(linkedInterest){ iEl.value = linkedInterest.amount.toFixed(2); iEl.dataset.touched = '1'; }
+      else { iEl.value = ''; iEl.dataset.touched = '1'; }
     } else if(txType === 'adjustment'){
       document.getElementById('tx-account').value = tx.accountId;
       // Current total already includes this record's own past delta, so it's
@@ -2236,21 +2306,61 @@
       var fromSel = document.getElementById('tx-from-account');
       var toSel = document.getElementById('tx-to-account');
       if(fromSel.value === toSel.value){ flashError2(toSel); showToast('Pick two different accounts'); return; }
+      var toAcct = state.accounts.find(function(a){ return a.id === toSel.value; });
+      var interestEl = document.getElementById('tx-interest');
+      var interestVal = isLiabilityType(toAcct && toAcct.type) ? (parseFloat(interestEl.value) || 0) : 0;
+      if(interestVal < 0){ flashError2(interestEl); return; }
+      if(interestVal > amountVal){
+        flashError2(interestEl);
+        showToast('Interest can\u2019t exceed the payment');
+        return;
+      }
+
       if(isEdit){
         var existingTransfer = state.transactions.find(function(t){ return t.id === editingTxId; });
         existingTransfer.amount = amountVal; existingTransfer.accountId = fromSel.value;
         existingTransfer.toAccountId = toSel.value; existingTransfer.note = note; existingTransfer.date = date;
+        // Keep the paired interest row in step with the payment it belongs to.
+        if(existingTransfer.linkId){
+          var pair = state.transactions.find(function(t){
+            return t.linkId === existingTransfer.linkId && t.id !== existingTransfer.id;
+          });
+          if(pair){
+            if(interestVal > 0){
+              pair.amount = interestVal; pair.accountId = toSel.value; pair.date = date;
+            } else {
+              state.transactions = state.transactions.filter(function(t){ return t.id !== pair.id; });
+              delete existingTransfer.linkId;
+            }
+          }
+        } else if(interestVal > 0){
+          var newLink = 'lnk_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+          existingTransfer.linkId = newLink;
+          state.transactions.unshift(makeInterestRow(interestVal, toSel.value, date, newLink));
+        }
       } else {
-        state.transactions.unshift({
+        var linkId = interestVal > 0 ? ('lnk_' + Date.now() + '_' + Math.random().toString(36).slice(2,7)) : null;
+        var transferTx = {
           id: 'tx_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
           type: 'transfer', amount: amountVal, accountId: fromSel.value, toAccountId: toSel.value,
           note: note, date: date
-        });
+        };
+        if(linkId) transferTx.linkId = linkId;
+        state.transactions.unshift(transferTx);
+        // The interest half is a real expense on the loan: it pushes the balance
+        // back up and leaves net worth, exactly as interest does in reality.
+        if(interestVal > 0) state.transactions.unshift(makeInterestRow(interestVal, toSel.value, date, linkId));
       }
       try{
         await saveTransactions();
+        if(interestVal > 0 && state.categories.expense.indexOf(INTEREST_CATEGORY) === -1){
+          state.categories.expense = pinOtherLast(state.categories.expense.concat([INTEREST_CATEGORY]));
+          await saveCategories();
+        }
         closeAddSheet();
-        showToast(isEdit ? 'Transfer updated' : 'Transfer added');
+        showToast(interestVal > 0
+          ? (isEdit ? 'Payment updated' : 'Payment recorded \u00b7 ' + fmt(amountVal - interestVal) + ' to principal')
+          : (isEdit ? 'Transfer updated' : 'Transfer added'));
         renderCurrentTab();
       }catch(e){ showToast('Could not save — try again'); }
       return;
@@ -2291,9 +2401,22 @@
 
   /* ---------- mutations ---------- */
   async function deleteTransaction(id){
-    state.transactions = state.transactions.filter(function(t){ return t.id !== id; });
-    try{ await saveTransactions(); showToast('Deleted'); renderCurrentTab(); }
-    catch(e){ showToast('Could not delete — try again'); }
+    var target = state.transactions.find(function(t){ return t.id === id; });
+    // A loan payment is stored as a linked pair (principal transfer + interest
+    // expense). Removing one alone would leave the balance quietly wrong.
+    var link = target && target.linkId;
+    var removed = 1;
+    if(link){
+      removed = state.transactions.filter(function(t){ return t.linkId === link; }).length;
+      state.transactions = state.transactions.filter(function(t){ return t.linkId !== link; });
+    } else {
+      state.transactions = state.transactions.filter(function(t){ return t.id !== id; });
+    }
+    try{
+      await saveTransactions();
+      showToast(removed > 1 ? 'Payment deleted (both parts)' : 'Deleted');
+      renderCurrentTab();
+    }catch(e){ showToast('Could not delete — try again'); }
   }
   async function deleteBudget(cat){
     delete state.budgets[cat];
@@ -3044,6 +3167,17 @@
   //
   // This is an estimate: real servicers accrue daily on their own schedule, so
   // expect small drift from your statement.
+  // True when an Interest expense already exists on this account in the same
+  // calendar month as the given date.
+  function hasRecordedInterest(accountId, dateStr){
+    var d = new Date(dateStr + 'T00:00:00');
+    return state.transactions.some(function(t){
+      if(t.type !== 'expense' || t.accountId !== accountId || t.category !== INTEREST_CATEGORY) return false;
+      var td = new Date(t.date + 'T00:00:00');
+      return td.getFullYear() === d.getFullYear() && td.getMonth() === d.getMonth();
+    });
+  }
+
   function processInterest(){
     var today = todayISO();
     var generated = 0;
@@ -3055,6 +3189,14 @@
       var iterations = 0;
       while(a.nextInterestDate <= today && iterations < cap){
         datesAdvanced = true;
+        // If interest for this account was already recorded in this calendar
+        // month — typically as the interest half of a logged payment — skip
+        // estimating it, so a real statement figure is never doubled up.
+        if(hasRecordedInterest(a.id, a.nextInterestDate)){
+          a.nextInterestDate = nextRecurDate(a.nextInterestDate, 'monthly', a.interestDay);
+          iterations++;
+          continue;
+        }
         // Balance as of the accrual date, which already includes any interest
         // posted by earlier iterations — so it compounds correctly.
         var owed = Math.max(0, -accountBalance(a.id, a.nextInterestDate));
@@ -3235,6 +3377,14 @@
   document.getElementById('type-adjust').addEventListener('click', function(){ setType('adjustment'); });
   document.getElementById('tx-category').addEventListener('change', handleCategorySelectChange);
   document.getElementById('tx-new-category-add').addEventListener('click', addInlineCategory);
+  document.getElementById('tx-to-account').addEventListener('change', function(){
+    document.getElementById('tx-interest').dataset.touched = '';
+    refreshTransferInterestField();
+  });
+  document.getElementById('tx-interest').addEventListener('input', function(){
+    // Once you type your own figure, stop overwriting it with the estimate.
+    this.dataset.touched = '1';
+  });
   document.getElementById('tx-account').addEventListener('change', function(){
     if(txType === 'adjustment') document.getElementById('tx-amount').value = accountBalance(this.value).toFixed(2);
   });
