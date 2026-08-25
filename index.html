@@ -420,6 +420,15 @@
   .account-apr:hover{color:var(--ink);}
   .account-apr .inline-edit{width:80px;}
   .account-apr-unset{font-style:italic; opacity:0.75;}
+  .account-confirm{
+    margin-top:12px; padding-top:12px; border-top:1px solid var(--line);
+  }
+  .account-confirm-title{font-weight:600; font-size:13.5px; color:var(--brick); margin-bottom:7px;}
+  .account-confirm-list{margin:0 0 12px; padding-left:18px; font-size:12px; color:var(--ink-soft); line-height:1.55;}
+  .account-confirm-list li{margin-bottom:4px;}
+  .account-confirm-actions{display:flex; gap:8px;}
+  .account-confirm-actions .btn-ghost,
+  .account-confirm-actions .btn-primary{flex:1; padding:9px; font-size:13px;}
   .apr-edit-row{display:flex; align-items:center; gap:7px; margin-bottom:7px; flex-wrap:wrap;}
   .apr-edit-row .inline-edit{width:74px;}
   .apr-edit-unit{font-size:12px; color:var(--ink-soft);}
@@ -2856,6 +2865,7 @@
       '<div class="account-balance ' + colorClass + '">' + fmt(bal) + '</div>' +
       '<div class="account-starting" role="button" tabindex="0" aria-label="Edit ' + startingLabel.toLowerCase() + ' for ' + escapeHtml(a.name) + ', currently ' + fmt(startingDisplay) + '">' + startingLabel + ': <span class="mono">' + fmt(startingDisplay) + '</span></div>' +
       (isLiability ? accountAprHtml(a) : '') +
+      (pendingAccountDelete === a.id ? accountDeleteConfirmHtml(a.id) : '') +
       '</div>';
   }
   function ordinalDay(d){
@@ -2996,6 +3006,7 @@
     document.getElementById('new-account-type-invest').classList.toggle('active', newAccountType === 'investment');
   }
   function openAccountsSheet(){
+    pendingAccountDelete = null;
     renderAccountsList();
     document.getElementById('new-account-name').value = '';
     newAccountType = 'bank';
@@ -3017,16 +3028,116 @@
       showToast('Account added');
     }catch(e){ showToast('Could not save'); }
   }
-  async function deleteAccount(id){
+  // Works out what has to happen to an account's transactions before it can be
+  // removed without corrupting anything else.
+  //
+  // The subtle case is a transfer between this account and one you're keeping:
+  // the money genuinely moved, so simply deleting the row would silently change
+  // the kept account's balance. Those become a plain expense/income on the kept
+  // side instead, preserving it exactly. Rows that only ever touched this
+  // account can just go.
+  function accountRemovalPlan(id){
+    var acct = state.accounts.find(function(a){ return a.id === id; });
+    var convert = [], remove = [];
+    state.transactions.forEach(function(t){
+      var isFrom = t.accountId === id, isTo = t.toAccountId === id;
+      if(!isFrom && !isTo) return;
+      if(t.type === 'transfer'){
+        var otherId = isFrom ? t.toAccountId : t.accountId;
+        var otherKept = otherId && otherId !== id && state.accounts.some(function(a){ return a.id === otherId; });
+        if(otherKept){ convert.push(t); return; }
+      }
+      remove.push(t);
+    });
+    var goals = state.goals.filter(function(g){ return g.accountId === id; });
+    return { account: acct, convert: convert, remove: remove, goals: goals };
+  }
+
+  async function performAccountRemoval(id){
     if(state.accounts.length <= 1){ showToast('You need at least one account'); return; }
-    var hasTx = state.transactions.some(function(t){ return t.accountId === id || t.toAccountId === id; });
-    if(hasTx){ showToast('Move or delete its transactions first'); return; }
+    var plan = accountRemovalPlan(id);
+    var isLiab = isLiabilityType(plan.account && plan.account.type);
+    var convertCategory = isLiab ? 'Loan Payment' : 'Other';
+
+    var removeIds = {};
+    plan.remove.forEach(function(t){ removeIds[t.id] = true; });
+
+    state.transactions = state.transactions.filter(function(t){ return !removeIds[t.id]; });
+
+    plan.convert.forEach(function(t){
+      var movedOut = t.accountId !== id; // the kept account paid into this one
+      var keptId = movedOut ? t.accountId : t.toAccountId;
+      t.type = movedOut ? 'expense' : 'income';
+      t.accountId = keptId;
+      delete t.toAccountId;
+      delete t.linkId;
+      t.category = movedOut ? convertCategory : 'Other';
+      var label = plan.account ? plan.account.name : 'removed account';
+      t.note = (t.note ? t.note + ' · ' : '') + (movedOut ? 'was payment to ' : 'was from ') + label;
+      t.note = t.note.slice(0, 60);
+    });
+
+    if(plan.convert.some(function(t){ return t.type === 'expense'; })
+       && state.categories.expense.indexOf(convertCategory) === -1){
+      state.categories.expense = pinOtherLast(state.categories.expense.concat([convertCategory]));
+      await saveCategories();
+    }
+
+    // A goal pointing at a gone account would read as broken; drop the link and
+    // leave the goal itself for the user to keep or delete.
+    plan.goals.forEach(function(g){ g.accountId = null; });
+    if(state.debtBudgets && state.debtBudgets[id]) delete state.debtBudgets[id];
+
     state.accounts = state.accounts.filter(function(a){ return a.id !== id; });
     try{
+      await saveTransactions();
       await saveAccounts();
+      if(plan.goals.length) await saveGoals();
+      await saveDebtBudgets();
+      pendingAccountDelete = null;
       renderAccountsList();
-      showToast('Account removed');
+      renderCurrentTab();
+      showToast('Removed ' + (plan.account ? plan.account.name : 'account'));
     }catch(e){ showToast('Could not delete'); }
+  }
+
+  var pendingAccountDelete = null;
+  function deleteAccount(id){
+    if(state.accounts.length <= 1){ showToast('You need at least one account'); return; }
+    var plan = accountRemovalPlan(id);
+    if(plan.convert.length === 0 && plan.remove.length === 0 && plan.goals.length === 0){
+      performAccountRemoval(id);
+      return;
+    }
+    pendingAccountDelete = id;
+    renderAccountsList();
+  }
+  function cancelAccountDelete(){
+    pendingAccountDelete = null;
+    renderAccountsList();
+  }
+  function accountDeleteConfirmHtml(id){
+    var plan = accountRemovalPlan(id);
+    var bits = [];
+    if(plan.convert.length){
+      bits.push('<li>' + plan.convert.length + ' transfer' + (plan.convert.length===1?'':'s') +
+        ' with your other accounts will be kept as expenses, so those balances stay exactly the same.</li>');
+    }
+    if(plan.remove.length){
+      bits.push('<li>' + plan.remove.length + ' entr' + (plan.remove.length===1?'y':'ies') +
+        ' that only touched this account will be deleted.</li>');
+    }
+    if(plan.goals.length){
+      bits.push('<li>' + plan.goals.length + ' goal' + (plan.goals.length===1?'':'s') +
+        ' will be unlinked (the goal itself is kept).</li>');
+    }
+    return '<div class="account-confirm">' +
+      '<div class="account-confirm-title">Remove ' + escapeHtml(plan.account ? plan.account.name : '') + '?</div>' +
+      '<ul class="account-confirm-list">' + bits.join('') + '</ul>' +
+      '<div class="account-confirm-actions">' +
+        '<button class="btn-ghost cancel-account-delete" type="button">Cancel</button>' +
+        '<button class="btn-primary confirm-account-delete" type="button" data-id="' + escapeHtml(id) + '">Remove</button>' +
+      '</div></div>';
   }
 
   /* ---------- categories management ---------- */
@@ -3310,6 +3421,12 @@
   });
 
   document.getElementById('accounts-sheet').addEventListener('click', function(e){
+    var confirmDel = e.target.closest('.confirm-account-delete');
+    if(confirmDel){ performAccountRemoval(confirmDel.dataset.id); return; }
+
+    var cancelDel = e.target.closest('.cancel-account-delete');
+    if(cancelDel){ cancelAccountDelete(); return; }
+
     var delBtn = e.target.closest('.del-account');
     if(delBtn){ deleteAccount(delBtn.closest('.account-card').dataset.id); return; }
 
