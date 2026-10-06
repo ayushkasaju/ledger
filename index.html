@@ -198,6 +198,27 @@
   .budget-summary-amounts{font-family:'IBM Plex Mono',monospace; font-size:19px; font-weight:600; color:var(--ink);}
   .budget-summary-of{font-size:14px; color:var(--ink-soft); font-weight:500;}
   .budget-summary-sub{font-size:12px; color:var(--ink-soft); margin-top:3px;}
+  .month-nav{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:10px; margin-bottom:14px;
+  }
+  .month-nav-label{
+    font-family:'IBM Plex Mono',monospace; font-size:14px; font-weight:600;
+    color:var(--ink); text-align:center; flex:1;
+  }
+  .month-nav-btn{
+    width:44px; height:44px; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    border:1px solid var(--line); background:var(--card); color:var(--ink);
+    border-radius:12px; font-size:20px; line-height:1; cursor:pointer;
+    font-family:inherit;
+  }
+  .month-nav-btn:disabled{opacity:0.3; cursor:default;}
+  .month-past-note{
+    font-size:11.5px; color:var(--ink-soft); line-height:1.5;
+    margin:-4px 0 14px; padding:9px 12px;
+    background:var(--card); border-radius:10px; border:1px solid var(--line);
+  }
   .budget-summary-split{font-size:11.5px; color:var(--ink-soft); margin-top:10px; padding-top:10px; border-top:1px solid var(--line); line-height:1.5;}
   .budget-summary-flag{
     flex-shrink:0; font-size:11px; font-weight:600; color:var(--brick);
@@ -1029,6 +1050,48 @@
     var daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     return { day: now.getDate(), daysInMonth: daysInMonth, fraction: now.getDate() / daysInMonth };
   }
+
+  /* ---------- browsing past months on the Budgets tab ----------
+     Only the Budgets tab is month-scoped; Home deliberately stays on the
+     current month, so navigating back here never changes what Home reports. */
+  var budgetViewOffset = 0; // 0 = this month, -1 = last month, and so on
+
+  function viewedBudgetMonth(){
+    var now = new Date();
+    var d = new Date(now.getFullYear(), now.getMonth() + budgetViewOffset, 1);
+    return {
+      year: d.getFullYear(),
+      month: d.getMonth(),
+      label: d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+      isCurrent: budgetViewOffset === 0
+    };
+  }
+  function transactionsInMonth(year, month){
+    return state.transactions.filter(function(t){
+      var d = new Date(t.date + 'T00:00:00');
+      return d.getFullYear() === year && d.getMonth() === month;
+    });
+  }
+  // A finished month has no "pace" left to be ahead or behind of — it's done,
+  // so the fraction is 1 and the result is simply final.
+  function monthProgressFor(year, month){
+    var now = new Date();
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+    if(now.getFullYear() === year && now.getMonth() === month){
+      return { day: now.getDate(), daysInMonth: daysInMonth, fraction: now.getDate()/daysInMonth, complete: false };
+    }
+    return { day: daysInMonth, daysInMonth: daysInMonth, fraction: 1, complete: true };
+  }
+  // How far back there is anything to look at, so navigation stops at the edge
+  // of real data rather than scrolling into empty months forever.
+  function earliestDataOffset(){
+    if(state.transactions.length === 0) return 0;
+    var min = null;
+    state.transactions.forEach(function(t){ if(!min || t.date < min) min = t.date; });
+    var d = new Date(min + 'T00:00:00');
+    var now = new Date();
+    return (d.getFullYear() - now.getFullYear()) * 12 + (d.getMonth() - now.getMonth());
+  }
   // How far past the straight-line pace counts as "ahead", in percentage points.
   // Generous early and tightening later, because real spending is lumpy — rent
   // and a grocery run both land in the first few days, which would otherwise
@@ -1051,8 +1114,9 @@
   }
   // What you've actually paid toward a liability this month — transfers into it.
   // Interest charged BY the loan is excluded; that's a cost, not a payment.
-  function debtPaidThisMonth(accountId){
-    return currentMonthTransactions().reduce(function(s,t){
+  function debtPaidThisMonth(accountId, ym){
+    var rows = ym ? transactionsInMonth(ym.year, ym.month) : currentMonthTransactions();
+    return rows.reduce(function(s,t){
       return (t.type === 'transfer' && t.toAccountId === accountId) ? s + t.amount : s;
     }, 0);
   }
@@ -1076,7 +1140,7 @@
       return (t.type === 'expense' && t.accountId === accountId && t.category === INTEREST_CATEGORY) ? s + t.amount : s;
     }, 0);
   }
-  function debtSummary(){
+  function debtSummary(ym){
     var accts = liabilityAccounts().map(function(a){
       var owed = Math.max(0, -accountBalance(a.id));
       var apr = a.apr || 0;
@@ -1085,7 +1149,7 @@
         monthlyInterest: owed * (apr/100/12),
         opening: Math.max(0, -(a.startingBalance || 0)),
         budget: state.debtBudgets[a.id] || 0,
-        paidThisMonth: debtPaidThisMonth(a.id),
+        paidThisMonth: debtPaidThisMonth(a.id, ym),
         avgPayment: averageDebtPayment(a.id, 6),
         interestPaid: interestPaidOnAccount(a.id)
       };
@@ -1103,10 +1167,11 @@
     };
   }
 
-  function unbudgetedSpending(){
+  function unbudgetedSpending(ym){
     var total = 0;
     var cats = {};
-    currentMonthTransactions().forEach(function(t){
+    var rows = ym ? transactionsInMonth(ym.year, ym.month) : currentMonthTransactions();
+    rows.forEach(function(t){
       if(t.type !== 'expense') return;
       if(t.category in state.budgets) return;
       total += t.amount;
@@ -1389,11 +1454,11 @@
 
   // showPacing is false on the Home tab's compact snapshot (no room for the
   // extra status line) and true on the Budgets tab itself.
-  function budgetCard(cat, showPacing){
+  function budgetCard(cat, showPacing, ym){
     var limit = state.budgets[cat];
-    var spent = categorySpent(cat);
+    var spent = ym ? categorySpentInMonth(cat, ym.year, ym.month) : categorySpent(cat);
     var pct = limit > 0 ? Math.round((spent/limit)*100) : 0;
-    var pace = monthProgress();
+    var pace = ym ? monthProgressFor(ym.year, ym.month) : monthProgress();
     var remaining = limit - spent;
 
     var statusHtml = '';
@@ -1402,6 +1467,10 @@
       if(spent > limit){
         statusText = fmt(spent - limit) + ' over budget';
         statusClass = 'budget-status over';
+      } else if(pace.complete){
+        // The month is finished: report the outcome, not a projection.
+        statusText = fmt(remaining) + ' under budget';
+        statusClass = 'budget-status ok';
       } else if(isAheadOfPace(spent, limit, pace.fraction)){
         statusText = fmt(remaining) + ' left · ahead of pace';
         statusClass = 'budget-status warn';
@@ -1412,12 +1481,19 @@
       statusHtml = '<div class="' + statusClass + '">' + statusText + '</div>';
     }
 
+    // A past month is a record: nothing on it is editable, because the limit is
+    // a single current value and changing it there would silently rewrite every
+    // other month too.
+    var readOnly = !!ym;
+    var amountsAttrs = readOnly ? ''
+      : ' role="button" tabindex="0" aria-label="Edit ' + escapeHtml(cat) + ' budget limit, currently ' + fmt(spent) + ' of ' + fmt(limit) + '"';
+
     return '<div class="card budget-card" data-cat="' + escapeHtml(cat) + '">' +
       '<div class="budget-head">' + categoryStamp(cat) +
       '<div class="budget-info"><div class="budget-cat">' + escapeHtml(cat) + '</div>' +
-      '<div class="budget-amounts" role="button" tabindex="0" aria-label="Edit ' + escapeHtml(cat) + ' budget limit, currently ' + fmt(spent) + ' of ' + fmt(limit) + '">' + fmt(spent) + ' of ' + fmt(limit) + '</div></div>' +
-      '<button class="icon-btn del-budget" aria-label="Delete ' + escapeHtml(cat) + ' budget">×</button></div>' +
-      gaugeBar(spent, limit, showPacing ? pace.fraction : undefined) +
+      '<div class="budget-amounts"' + amountsAttrs + '>' + fmt(spent) + ' of ' + fmt(limit) + '</div></div>' +
+      (readOnly ? '' : '<button class="icon-btn del-budget" aria-label="Delete ' + escapeHtml(cat) + ' budget">×</button>') + '</div>' +
+      gaugeBar(spent, limit, (showPacing && !pace.complete) ? pace.fraction : undefined) +
       '<div class="budget-pct">' + pct + '%</div>' +
       statusHtml + '</div>';
   }
@@ -1801,25 +1877,43 @@
       recentHtml;
   }
 
+  function monthNavHtml(){
+    var vm = viewedBudgetMonth();
+    var minOffset = earliestDataOffset();
+    var canBack = budgetViewOffset > minOffset;
+    var canFwd = budgetViewOffset < 0;
+    return '<div class="month-nav">' +
+      '<button class="month-nav-btn" id="budget-prev-month" type="button"' + (canBack ? '' : ' disabled') +
+        ' aria-label="Previous month">&#8249;</button>' +
+      '<div class="month-nav-label">' + vm.label + (vm.isCurrent ? '' : '') + '</div>' +
+      '<button class="month-nav-btn" id="budget-next-month" type="button"' + (canFwd ? '' : ' disabled') +
+        ' aria-label="Next month">&#8250;</button>' +
+      '</div>';
+  }
+
   function renderBudgets(){
     var container = document.getElementById('view-budgets');
     var cats = Object.keys(state.budgets);
-    var pace = monthProgress();
+    var vm = viewedBudgetMonth();
+    var ym = vm.isCurrent ? null : { year: vm.year, month: vm.month };
+    var pace = monthProgressFor(vm.year, vm.month);
 
     // Debt payment targets are budget line items too — a loan payment is just as
     // much a monthly commitment as rent, so the headline total covers both.
-    var debt = debtSummary();
+    var debt = debtSummary(ym);
     var debtBudgeted = debt.totalBudgeted;
     var debtPaid = debt.paidOnBudgeted;
+
+    function spentIn(c){ return ym ? categorySpentInMonth(c, ym.year, ym.month) : categorySpent(c); }
 
     var summaryHtml = '';
     var rows = '';
     if(cats.length > 0 || debtBudgeted > 0){
       var catBudgeted = cats.reduce(function(s,c){ return s + state.budgets[c]; }, 0);
-      var catSpent = cats.reduce(function(s,c){ return s + categorySpent(c); }, 0);
+      var catSpent = cats.reduce(function(s,c){ return s + spentIn(c); }, 0);
       var totalBudgeted = catBudgeted + debtBudgeted;
       var totalSpent = catSpent + debtPaid;
-      var overCount = cats.filter(function(c){ return categorySpent(c) > state.budgets[c]; }).length;
+      var overCount = cats.filter(function(c){ return spentIn(c) > state.budgets[c]; }).length;
       var summaryPct = totalBudgeted > 0 ? Math.round((totalSpent/totalBudgeted)*100) : 0;
       var overNote = overCount > 0
         ? '<span class="budget-summary-flag">' + overCount + ' over limit</span>'
@@ -1833,39 +1927,46 @@
         '<div class="card budget-summary">' +
           '<div class="budget-summary-top">' +
             '<div><div class="budget-summary-amounts">' + fmt(totalSpent) + ' <span class="budget-summary-of">of ' + fmt(totalBudgeted) + '</span></div>' +
-            '<div class="budget-summary-sub">Day ' + pace.day + ' of ' + pace.daysInMonth + ' · ' + summaryPct + '% used</div></div>' +
+            '<div class="budget-summary-sub">' + (pace.complete ? 'Final · ' : 'Day ' + pace.day + ' of ' + pace.daysInMonth + ' · ') + summaryPct + '% used</div></div>' +
             overNote +
           '</div>' +
-          gaugeBar(totalSpent, totalBudgeted, pace.fraction) +
+          gaugeBar(totalSpent, totalBudgeted, pace.complete ? undefined : pace.fraction) +
           splitNote +
         '</div>';
 
       // Sort by urgency: over-budget first, then by how much of the limit is
       // used — the budget you're about to blow should never be buried.
       var sorted = cats.slice().sort(function(a,b){
-        var aPct = state.budgets[a] > 0 ? categorySpent(a)/state.budgets[a] : 0;
-        var bPct = state.budgets[b] > 0 ? categorySpent(b)/state.budgets[b] : 0;
+        var aPct = state.budgets[a] > 0 ? spentIn(a)/state.budgets[a] : 0;
+        var bPct = state.budgets[b] > 0 ? spentIn(b)/state.budgets[b] : 0;
         return bPct - aPct;
       });
-      rows = sorted.map(function(c){ return budgetCard(c, true); }).join('');
+      rows = sorted.map(function(c){ return budgetCard(c, true, ym); }).join('');
     }
 
     var empty = cats.length === 0 ? emptyState('No budgets yet', 'Set a monthly limit for a category to start tracking.') : '';
 
     // Spending in categories with no budget is invisible otherwise, which can
     // make this tab look healthy while real money goes untracked.
-    var unbudgeted = unbudgetedSpending();
+    var unbudgeted = unbudgetedSpending(ym);
     var unbudgetedHtml = unbudgeted.total > 0
       ? '<div class="card budget-unbudgeted">' +
           '<div class="budget-unbudgeted-amt">' + fmt(unbudgeted.total) + '</div>' +
-          '<div class="budget-unbudgeted-label">spent this month in ' + unbudgeted.categoryCount +
+          '<div class="budget-unbudgeted-label">spent ' + (vm.isCurrent ? 'this month' : 'in ' + vm.label) + ' in ' + unbudgeted.categoryCount +
             ' categor' + (unbudgeted.categoryCount === 1 ? 'y' : 'ies') + ' with no budget set</div>' +
         '</div>'
       : '';
 
+    // Editing only ever applies to the live month, so the add form and the debt
+    // section (which carries its own inline editors) are hidden while looking
+    // back — a past month is a record, not something to change.
+    var pastNote = vm.isCurrent ? '' :
+      '<div class="month-past-note">Showing a finished month. Limits shown are your current ones.</div>';
+
     container.innerHTML = '<div class="section-title">Monthly Budgets</div>' +
-      summaryHtml + empty + rows + unbudgetedHtml + addBudgetForm() +
-      debtSectionHtml();
+      monthNavHtml() + pastNote +
+      summaryHtml + empty + rows + unbudgetedHtml +
+      (vm.isCurrent ? addBudgetForm() + debtSectionHtml() : '');
   }
 
   function renderGoals(){
@@ -2013,6 +2114,7 @@
   }
 
   function switchTab(tab){
+    if(tab === 'budgets') budgetViewOffset = 0;
     activeTab = tab;
     document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
     document.getElementById('view-' + tab).classList.add('active');
@@ -3365,6 +3467,17 @@
 
     var saveLimitBtn = target.closest('.save-limit');
     if(saveLimitBtn){ saveNewLimit(saveLimitBtn.closest('.budget-card')); return; }
+
+    var prevMonth = target.closest('#budget-prev-month');
+    if(prevMonth){
+      if(budgetViewOffset > earliestDataOffset()){ budgetViewOffset--; renderBudgets(); }
+      return;
+    }
+    var nextMonth = target.closest('#budget-next-month');
+    if(nextMonth){
+      if(budgetViewOffset < 0){ budgetViewOffset++; renderBudgets(); }
+      return;
+    }
 
     var delBudgetBtn = target.closest('.del-budget');
     if(delBudgetBtn){ deleteBudget(delBudgetBtn.closest('.budget-card').dataset.cat); return; }
